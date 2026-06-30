@@ -46,7 +46,12 @@ import {
 import { initAuthGate, getActiveUser, getActiveRole } from "./services/auth.js";
 
 import { renderRoomsGrid } from "./components/RoomCard.js";
-import { openModal, closeModal, refreshOccupiedTotals } from "./components/CheckInModal.js";
+import { openModal as openCheckInModal, closeModal as closeCheckInModal } from "./components/CheckInModal.js";
+import {
+  openModal as openCheckOutModal,
+  closeModal as closeCheckOutModal,
+  refreshOccupiedTotals
+} from "./components/CheckOutModal.js";
 import { printReceipt } from "./components/Receipt.js";
 
 let CURRENT_ROLE = null;
@@ -724,12 +729,18 @@ async function _handleDeleteExpense(expenseId) {
 
 function _onCardClick(room) {
   setActiveRoom(room);
-  openModal(room, {
-    onCheckIn: _handleCheckIn,
-    onAddShop: _handleAddShop,
-    onCheckOut: _handleCheckOut,
-    ownerMode: getActiveRole() === "owner"
-  });
+
+  if (room.status === "available") {
+    openCheckInModal(room, {
+      onCheckIn: _handleCheckIn,
+      ownerMode: getActiveRole() === "owner"
+    });
+  } else if (room.status === "occupied") {
+    openCheckOutModal(room, {
+      onAddShop: _handleAddShop,
+      onCheckOut: _handleCheckOut
+    });
+  }
 }
 
 // ─────────────────────────────────────────────────────
@@ -763,7 +774,7 @@ async function _handleCheckIn(formData) {
     }
   });
 
-  closeModal();
+  closeCheckInModal();
   showToast("info", "Saving check-in…", formData.guest_name);
   
   // Define the payload for Airtable
@@ -862,7 +873,7 @@ async function _handleAddShop({ item_name, item_price, quantity }) {
 // Checkout handler
 // ─────────────────────────────────────────────────────
 
-async function _handleCheckOut() {
+async function _handleCheckOut({ payment_method, mpesa_code } = {}) {
   const { activeRoom } = getState();
   if (!activeRoom) return;
 
@@ -879,8 +890,8 @@ async function _handleCheckOut() {
   showToast("info", "Checking out…", activeRoom.room_name);
 
   const result = await checkOut(activeRoom.booking_id, {
-    payment_method: activeRoom.payment_method ?? null,
-    mpesa_code: activeRoom.mpesa_code ?? null
+    payment_method: payment_method ?? activeRoom.payment_method ?? null,
+    mpesa_code: mpesa_code ?? activeRoom.mpesa_code ?? null
   });
 
   if (result.ok) {
@@ -896,7 +907,7 @@ async function _handleCheckOut() {
       nights: null,
       activeBooking: null
     });
-    closeModal();
+    closeCheckOutModal();
     showToast("success", "Checked out!", `${activeRoom.room_name} is now available.`);
     await _loadRooms();
   } else {
