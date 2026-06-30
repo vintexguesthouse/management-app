@@ -168,12 +168,14 @@ function _startClock() {
 
 const VIEW_IDS = {
   dashboard: "view-dashboard",
-  expenses: "view-expenses"
+  expenses: "view-expenses",
+  history: "view-history" // ADDED
 };
 
 const VIEW_TITLES = {
   dashboard: "Room Dashboard",
-  expenses: "Expenses Log"
+  expenses: "Expenses Log",
+  history: "Booking History" // ADDED
 };
 
 function _switchView(view) {
@@ -192,6 +194,10 @@ function _switchView(view) {
   if (statsBar) {
     statsBar.style.display = view === "dashboard" ? "" : "none";
   }
+  
+  if (view === "history") {
+  _renderHistoryView();
+}
 
   document.querySelectorAll(".nav-link").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.view === view);
@@ -1001,4 +1007,25 @@ function _renderSyncIndicator(status) {
 
   icon.className = `w-3 h-3 rounded-full ${colors[status] || colors.synced}`;
   icon.title = `Status: ${status}`;
+}
+
+
+// Import the component
+import { renderBookingHistory } from "./components/BookingHistory.js";
+
+async function _renderHistoryView() {
+  const container = document.getElementById("history-container");
+  if (!container) return;
+  
+  container.innerHTML = '<p class="text-gray-500 text-center py-10">Loading history...</p>';
+  
+  // Reuse the existing fetchBookings API call
+  const result = await fetchBookings();
+  
+  if (result.ok) {
+    // Pass the raw bookings array to the component
+    renderBookingHistory(result.bookings);
+  } else {
+    container.innerHTML = '<p class="text-red-500 text-center py-10">Failed to load history.</p>';
+  }
 }
