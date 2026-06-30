@@ -1,0 +1,266 @@
+/**
+ * js/services/state.js
+ * ─────────────────────────────────────────────────────
+ * Centralized in-memory state for Vintex Guest House SPA.
+ * Acts as a single source of truth — no localStorage, no
+ * IndexedDB; all state lives for the session duration.
+ *
+ * Consumers should call getState() to read and setState()
+ * to mutate, ensuring all subscribers are notified.
+ *
+ * v2 changes:
+ *  - Added `expenses: []` to the root state tree.
+ *  - Added setExpenses(), addExpense(), patchExpense(),
+ *    removeExpense() convenience mutators.
+ */
+
+/** @type {Map<string, Function[]>} event → listeners */
+const _listeners = new Map();
+
+/** @type {Object} The single state tree */
+const _state = {
+  /**
+   * rooms: Array of room objects fetched from the backend.
+   * Each room shape (as returned by the API):
+   * {
+   *   room_name:    string,
+   *   room_type:    string,          // "Bed & Breakfast" | "Bed Only"
+   *   base_rate:    number,          // Master rate in KSH
+   *   status:       string,          // "available" | "occupied"
+   *   guest_name:   string | null,
+   *   check_in:     string | null,   // ISO date string
+   *   booking_id:   string | null,
+   *   charged_rate: number | null,
+   *   shop_total:   number | null,
+   *   shop_items:   Array  | null,   // [{name, qty, unit_price}]
+   *   nights:       number | null,
+   *   payment_status: string | null, // "unpaid" | "paid" — set at check-in
+   * }
+   */
+  rooms: [],
+
+  /**
+   * activeRoom: The room currently open in the modal (or null).
+   */
+  activeRoom: null,
+
+  /**
+   * expenses: Array of expense objects fetched from / posted to the backend.
+   * Each expense shape:
+   * {
+   *   expense_id:   string,          // Unique row ID from the sheet
+   *   amount:       number,          // KSH
+   *   category:     string,          // e.g. "Utilities", "Supplies"
+   *   description:  string,
+   *   created_by:   string,          // user ID who logged it
+   *   created_at:   string,          // ISO date string
+   * }
+   */
+  expenses: [],
+
+  /**
+   * ui: Transient UI flags.
+   */
+  ui: {
+    loading: true,       // Global rooms fetch-in-progress
+    expensesLoading: false,
+    modalOpen: false,
+    activeView: 'dashboard',  // 'dashboard' | 'expenses'
+    syncStatus: 'synced',
+  },
+
+  /**
+   * lastSync: Timestamp (ms) of the most recent successful rooms API pull.
+   */
+  lastSync: null,
+
+  /**
+   * lastExpensesSync: Timestamp (ms) of the most recent successful expenses pull.
+   */
+  lastExpensesSync: null,
+};
+
+// ─────────────────────────────────────────────────────
+// Core pub/sub engine
+// ─────────────────────────────────────────────────────
+
+/**
+ * Subscribe to state events.
+ * @param {string}   event    - Event name (e.g. "change")
+ * @param {Function} callback - Receives the event payload.
+ * @returns {Function}        - Unsubscribe function.
+ */
+export function on(event, callback) {
+  if (!_listeners.has(event)) _listeners.set(event, []);
+  _listeners.get(event).push(callback);
+
+  return () => {
+    const list = _listeners.get(event) ?? [];
+    const idx  = list.indexOf(callback);
+    if (idx !== -1) list.splice(idx, 1);
+  };
+}
+
+/** @internal Emits an event to all registered listeners. */
+function _emit(event, payload) {
+  const list = _listeners.get(event) ?? [];
+  list.forEach(fn => fn(payload));
+}
+
+// ─────────────────────────────────────────────────────
+// Core mutator
+// ─────────────────────────────────────────────────────
+
+/**
+ * Merges a partial state update into the tree and emits
+ * a "change" event carrying the array of changed keys.
+ *
+ * @param {Object} partial  - Top-level keys to merge.
+ * @param {string} [source] - Debug label for the caller.
+ */
+export function setState(partial, source = 'unknown') {
+  const changedKeys = [];
+
+  for (const [key, value] of Object.entries(partial)) {
+    if (_state[key] !== value) {
+      _state[key] = value;
+      changedKeys.push(key);
+    }
+  }
+
+  if (changedKeys.length > 0) {
+    _emit('change', { changedKeys, source });
+  }
+}
+
+// ─────────────────────────────────────────────────────
+// Reader
+// ─────────────────────────────────────────────────────
+
+/**
+ * Returns a shallow copy of the entire state tree.
+ * Do not mutate nested arrays/objects directly.
+ * @returns {Object}
+ */
+export function getState() {
+  return { ..._state };
+}
+
+// ─────────────────────────────────────────────────────
+// Rooms convenience mutators
+// ─────────────────────────────────────────────────────
+
+/**
+ * Replaces the entire rooms array and marks sync time.
+ * @param {Array} rooms
+ */
+export function setRooms(rooms) {
+  setState(
+    { rooms, lastSync: Date.now(), ui: { ..._state.ui, loading: false } },
+    'setRooms'
+  );
+}
+
+/**
+ * Sets the room currently active in the slide-out panel.
+ * Pass null to clear.
+ * @param {Object|null} room
+ */
+export function setActiveRoom(room) {
+  setState(
+    { activeRoom: room, ui: { ..._state.ui, modalOpen: !!room } },
+    'setActiveRoom'
+  );
+}
+
+/**
+ * Merges a patch object into a single room identified by room_name.
+ * Also patches activeRoom if it is the same room.
+ * @param {string} roomName
+ * @param {Object} patch
+ */
+export function patchRoom(roomName, patch) {
+  const rooms = _state.rooms.map(r =>
+    r.room_name === roomName ? { ...r, ...patch } : r
+  );
+  setState({ rooms }, 'patchRoom');
+
+  if (_state.activeRoom?.room_name === roomName) {
+    setState(
+      { activeRoom: { ..._state.activeRoom, ...patch } },
+      'patchRoom:active'
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────
+// Expenses convenience mutators
+// ─────────────────────────────────────────────────────
+
+/**
+ * Replaces the entire expenses array and marks sync time.
+ * Triggers a "change" event with key "expenses".
+ * @param {Array} expenses
+ */
+export function setExpenses(expenses) {
+  setState(
+    {
+      expenses,
+      lastExpensesSync: Date.now(),
+      ui: { ..._state.ui, expensesLoading: false },
+    },
+    'setExpenses'
+  );
+}
+
+/**
+ * Prepends a single new expense to the front of the list
+ * (most-recent-first order).
+ * @param {Object} expense - A fully-formed expense object.
+ */
+export function addExpense(expense) {
+  const expenses = [expense, ..._state.expenses];
+  setState({ expenses }, 'addExpense');
+}
+
+/**
+ * Merges a patch object into a single expense identified by expense_id.
+ * @param {string} expenseId
+ * @param {Object} patch
+ */
+export function patchExpense(expenseId, patch) {
+  const expenses = _state.expenses.map(ex =>
+    ex.expense_id === expenseId ? { ...ex, ...patch } : ex
+  );
+  setState({ expenses }, 'patchExpense');
+}
+
+/**
+ * Removes a single expense from the list by expense_id.
+ * @param {string} expenseId
+ */
+export function removeExpense(expenseId) {
+  const expenses = _state.expenses.filter(ex => ex.expense_id !== expenseId);
+  setState({ expenses }, 'removeExpense');
+}
+
+/**
+ * Sets the active navigation view ('dashboard' | 'expenses').
+ * Triggers re-render in the view controller.
+ * @param {'dashboard'|'expenses'} view
+ */
+export function setActiveView(view) {
+  setState(
+    { ui: { ..._state.ui, activeView: view } },
+    'setActiveView'
+  );
+}
+
+/**
+ * Convenience to update only the sync status in the UI tree.
+ * @param {'synced' | 'saving' | 'error'} status 
+ */
+export function setSyncStatus(status) {
+  // We keep the existing UI state (..._state.ui) and just overwrite syncStatus
+  setState({ ui: { ..._state.ui, syncStatus: status } }, 'setSyncStatus');
+}
