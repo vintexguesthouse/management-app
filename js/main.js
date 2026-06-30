@@ -602,7 +602,7 @@ function _wireExpensesForm() {
         errorBox.classList.remove("hidden");
       }
       showToast("error", "Network error", err.message);
-    } filey {
+    } finally {
       saveBtn.disabled = false;
       if (indicator) indicator.classList.add("hidden");
     }
