@@ -766,6 +766,27 @@ async function _handleCheckIn(formData) {
 
   closeModal();
   showToast("info", "Saving check-in…", formData.guest_name);
+  
+  // 2. THIS IS FOR AIRTABLE (The "Payload")//
+  
+  const airtablePayload = {
+  "room_name": formData.room_name,
+  "guest_name": formData.guest_name,
+  "nights": Number(formData.nights),
+  "check_in": new Date().toISOString(),
+  "room_type": formData.room_type,
+  "base_rate": Number(formData.base_rate),
+  "charged_rate": Number(formData.charged_rate),
+  "shop_charge": 0,
+  "payment_status": formData.payment_status ?? "unpaid",
+  "is_active": true,
+  "created_by": created_by
+};
+
+  // Now, only send the clean payload to the API
+  const result = await checkIn(airtablePayload);
+  
+  
 
   const result = await checkIn({ ...formData, created_by });
 
