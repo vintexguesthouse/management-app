@@ -91,3 +91,54 @@ export async function addShopItem(airtableId, payload) {
     return { ok: true };
   } catch (err) { return _handleError(err); }
 }
+
+// --- ADD THESE EXPENSE FUNCTIONS TO api.js ---
+
+// 6. FETCH EXPENSES
+export async function fetchExpenses() {
+  try {
+    const response = await fetch(`${AIRTABLE_URL}/expenses`, { method: 'GET', headers: getHeaders() });
+    if (!response.ok) return _handleError(`HTTP ${response.status}: ${response.statusText}`);
+    const data = await response.json();
+    return { ok: true, expenses: data.records.map(r => ({ expense_id: r.id, ...r.fields })) };
+  } catch (err) { return _handleError(err); }
+}
+
+// 7. ADD EXPENSE
+export async function addExpenseAPI(payload) {
+  try {
+    const response = await fetch(`${AIRTABLE_URL}/expenses`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({ fields: payload })
+    });
+    if (!response.ok) return _handleError(`HTTP ${response.status}: ${response.statusText}`);
+    const data = await response.json();
+    return { ok: true, expense_id: data.id };
+  } catch (err) { return _handleError(err); }
+}
+
+// 8. PATCH EXPENSE
+export async function patchExpenseAPI(expenseId, payload) {
+  try {
+    const response = await fetch(`${AIRTABLE_URL}/expenses/${expenseId}`, {
+      method: 'PATCH',
+      headers: getHeaders(),
+      body: JSON.stringify({ fields: payload })
+    });
+    if (!response.ok) return _handleError(`HTTP ${response.status}: ${response.statusText}`);
+    return { ok: true };
+  } catch (err) { return _handleError(err); }
+}
+
+// 9. DELETE EXPENSE
+export async function deleteExpenseAPI(expenseId) {
+  try {
+    const response = await fetch(`${AIRTABLE_URL}/expenses/${expenseId}`, {
+      method: 'DELETE',
+      headers: getHeaders()
+    });
+    if (!response.ok) return _handleError(`HTTP ${response.status}: ${response.statusText}`);
+    return { ok: true };
+  } catch (err) { return _handleError(err); }
+}
