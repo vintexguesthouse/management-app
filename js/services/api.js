@@ -8,8 +8,26 @@ const getHeaders = () => ({
   'Content-Type': 'application/json'
 });
 
-function _handleError(err) {
-  const message = err instanceof Error ? err.message : String(err ?? 'Unknown error');
+// This replaces your existing function at the top of api.js
+function _handleError(err, response = null) {
+  // 1. Get the basic error message
+  let message = err instanceof Error ? err.message : String(err ?? 'Unknown error');
+  
+  // 2. If a response object was provided, extract the hidden details from Airtable
+  if (response) {
+    // We use a self-invoking async function inside to read the JSON safely
+    (async () => {
+      try {
+        const errorBody = await response.json();
+        console.error('--- AIRTABLE ERROR DETAILS ---');
+        console.error(JSON.stringify(errorBody, null, 2)); 
+      } catch (e) {
+        console.error('Could not parse error response');
+      }
+    })();
+  }
+  
+  // 3. Log the message like normal
   console.error('[Vintex API]', message);
   return { ok: false, error: message };
 }
@@ -35,7 +53,7 @@ export async function checkIn(payload) {
       // created booking being flagged active the moment it lands in Airtable.
       body: JSON.stringify({ fields: { ...payload, is_active: true } })
     });
-    if (!response.ok) return _handleError(`HTTP ${response.status}: ${response.statusText}`);
+    if (!response.ok) return _handleError(`HTTP ${response.status}`, response);
     const data = await response.json();
     // Surface the new Airtable record id so the caller can store it as
     // room.booking_id immediately, without waiting for the next poll.
@@ -112,7 +130,7 @@ export async function addExpenseAPI(payload) {
       headers: getHeaders(),
       body: JSON.stringify({ fields: payload })
     });
-    if (!response.ok) return _handleError(`HTTP ${response.status}: ${response.statusText}`);
+    if (!response.ok) return _handleError(`HTTP ${response.status}`, response);
     const data = await response.json();
     return { ok: true, expense_id: data.id };
   } catch (err) { return _handleError(err); }
