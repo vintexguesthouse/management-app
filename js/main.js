@@ -771,7 +771,7 @@ async function _handleCheckIn(formData) {
     "room_name": formData.room_name,
     "guest_name": formData.guest_name,
     "nights": Number(formData.nights),
-    "check_in": new Date().toISOString(),
+    "check_in": new Date().toISOString().split('T')[0], // This sends "2026-06-30" instead of the full timestamp
     "room_type": formData.room_type,
     "base_rate": Number(formData.base_rate),
     "charged_rate": Number(formData.charged_rate),
