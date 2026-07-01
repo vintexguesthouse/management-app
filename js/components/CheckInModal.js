@@ -100,7 +100,7 @@ function _buildCheckInForm(room) {
         <div class="grid grid-cols-2 gap-2">
           <button type="button" data-type="Bed &amp; Breakfast"
             class="room-type-btn py-2.5 px-3 rounded-lg border text-sm font-medium transition-colors
-                   ${room.room_type === "Bed & Breakfast" ? "bg-brand-700 border-brand-500 text-white" : "bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-500"}">
+                   ${room.room_type === "Bed and Breakfast" ? "bg-brand-700 border-brand-500 text-white" : "bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-500"}">
             Bed &amp; Breakfast
           </button>
           <button type="button" data-type="Bed Only"
