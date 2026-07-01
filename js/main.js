@@ -1029,3 +1029,10 @@ async function _renderHistoryView() {
     container.innerHTML = '<p class="text-red-500 text-center py-10">Failed to load history.</p>';
   }
 }
+
+// ─────────────────────────────────────────────────────
+// Add this helper function at the bottom of main.js
+// ─────────────────────────────────────────────────────
+function _cleanDate(isoString) {
+  return isoString.split('T')[0]; // Converts 2026-07-01T12:00:00Z to 2026-07-01
+}
