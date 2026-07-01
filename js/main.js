@@ -62,20 +62,20 @@ let _activeRoomFilter = "all";
 // ─────────────────────────────────────────────────────
 
 const ROOM_DEFINITIONS = [
-  { room_name: "Charity", room_type: "Bed & Breakfast", base_rate: 3500 },
+  { room_name: "Charity", room_type: "Bed and Breakfast", base_rate: 3500 },
   { room_name: "Chastity", room_type: "Bed Only", base_rate: 2500 },
-  { room_name: "Faithfulness", room_type: "Bed & Breakfast", base_rate: 3500 },
+  { room_name: "Faithfulness", room_type: "Bed and Breakfast", base_rate: 3500 },
   { room_name: "Generosity", room_type: "Bed & Breakfast", base_rate: 4000 },
   { room_name: "Goodness", room_type: "Bed Only", base_rate: 2500 },
-  { room_name: "Grace", room_type: "Bed & Breakfast", base_rate: 3500 },
+  { room_name: "Grace", room_type: "Bed and Breakfast", base_rate: 3500 },
   { room_name: "Joy", room_type: "Bed Only", base_rate: 2500 },
-  { room_name: "Kindness", room_type: "Bed & Breakfast", base_rate: 3500 },
-  { room_name: "Love", room_type: "Bed & Breakfast", base_rate: 4500 },
+  { room_name: "Kindness", room_type: "Bed and Breakfast", base_rate: 3500 },
+  { room_name: "Love", room_type: "Bed and Breakfast", base_rate: 4500 },
   { room_name: "Mercy", room_type: "Bed Only", base_rate: 2500 },
   { room_name: "Modesty", room_type: "Bed Only", base_rate: 2500 },
-  { room_name: "Patience", room_type: "Bed & Breakfast", base_rate: 3500 },
+  { room_name: "Patience", room_type: "Bed and Breakfast", base_rate: 3500 },
   { room_name: "Self-Control", room_type: "Bed Only", base_rate: 2500 },
-  { room_name: "Peace", room_type: "Bed & Breakfast", base_rate: 4000 }
+  { room_name: "Peace", room_type: "Bed and Breakfast", base_rate: 4000 }
 ];
 
 // ─────────────────────────────────────────────────────
