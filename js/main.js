@@ -569,27 +569,27 @@ function _wireExpensesForm() {
     const activeUser = getActiveUser();
 
     try {
-      // Debug: Check the exact structure before it is stringified
-      console.table(payload);
-      // CHANGED: Linked directly to airtable API creation engine
-      const result = await addExpenseAPI({
-        amount,
-        category,
-        description,
-        created_by: activeUser,
-        created_at: new Date().toISOString()
-      });
+      // 1. Define it first so it's not undefined
+      const expenseData = {
+        amount: Number(amount),
+        category: category,
+        description: description,
+        // Ensure these keys match Airtable headers EXACTLY
+        date: new Date().toISOString().split("T")[0]
+      };
+
+      // 2. Now you can safely log it
+      console.table(expenseData);
+
+      // 3. Now send it
+      const result = await addExpenseAPI((expenseData));
 
       if (result.ok) {
         setSyncStatus("synced");
 
         addExpense({
           expense_id: result.expense_id ?? `local_${Date.now()}`,
-          amount,
-          category,
-          description,
-          created_by: activeUser,
-          created_at: new Date().toISOString()
+          ...expenseData // This contains amount, category, description, and date
         });
 
         if (amountEl) amountEl.value = "";
@@ -1033,4 +1033,15 @@ async function _renderHistoryView() {
 // ─────────────────────────────────────────────────────
 function _cleanDate(isoString) {
   return isoString.split("T")[0]; // Converts 2026-07-01T12:00:00Z to 2026-07-01
+}
+
+
+// Add this in main.js
+function _prepareExpensePayload(amount, category, description) {
+  return {
+    amount: Number(amount),
+    category: category,
+    description: description,
+    date: new Date().toISOString().split("T")[0] // Standardized format
+  };
 }
