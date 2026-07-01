@@ -101,7 +101,7 @@ export async function addShopItem(airtableId, payload) {
         }
       }),
     });
-    if (!response.ok) return _handleError(`HTTP ${response.status}: ${response.statusText}`);
+    if (!response.ok) return _handleError(`HTTP ${response.status}`, response);
     return { ok: true };
   } catch (err) { return _handleError(err); }
 }
