@@ -186,7 +186,7 @@ export function renderBookingHistory(bookings) {
   }
 
   const pastBookings = (Array.isArray(bookings) ? bookings : [])
-    .filter((b) => b.is_active === false)
+    .filter((b) => !b.is_active)
     .map(_normalizeBooking)
     .sort((a, b) => new Date(b.date ?? 0) - new Date(a.date ?? 0));
 
