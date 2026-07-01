@@ -204,7 +204,6 @@ function _switchView(view) {
   });
 
   if (view === "expenses") {
-    _renderExpenses();
     _loadExpenses();
   }
 
@@ -570,19 +569,23 @@ function _wireExpensesForm() {
 
     try {
       // 1. Define it first so it's not undefined
+      // Inside your add expense logic in main.js
       const expenseData = {
         amount: Number(amount),
         category: category,
         description: description,
-        // Ensure these keys match Airtable headers EXACTLY
-        date: new Date().toISOString().split("T")[0]
+        date: new Date().toISOString().split("T")[0],
+        // 1. Auto-identify the user
+        created_by: getActiveUser(),
+        // 2. Add a temp ID for immediate UI feedback
+        expense_id: `local_${Date.now()}`
       };
 
       // 2. Now you can safely log it
       console.table(expenseData);
 
       // 3. Now send it
-      const result = await addExpenseAPI((expenseData));
+      const result = await addExpenseAPI(expenseData);
 
       if (result.ok) {
         setSyncStatus("synced");
@@ -935,6 +938,7 @@ function _subscribeToState() {
 
     if (changedKeys.includes("expenses")) {
       const { ui } = getState();
+      console.log("State change detected. Active view:", ui.activeView);
       if (ui.activeView === "expenses") {
         _renderExpenses();
       }
@@ -1034,7 +1038,6 @@ async function _renderHistoryView() {
 function _cleanDate(isoString) {
   return isoString.split("T")[0]; // Converts 2026-07-01T12:00:00Z to 2026-07-01
 }
-
 
 // Add this in main.js
 function _prepareExpensePayload(amount, category, description) {
