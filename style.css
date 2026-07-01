@@ -45,6 +45,15 @@ body.drawer-open {
   scrollbar-color: #374151 transparent;
 }
 
+/* ── Status dot subtle pulse (hook: .status-dot-pulse in RoomCard.js) ── */
+@keyframes status-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.55; }
+}
+.status-dot-pulse {
+  animation: status-pulse 2s ease-in-out infinite;
+}
+
 /* ── Spin animation for refresh ── */
 @keyframes spin-once {
   from { transform: rotate(0deg); }

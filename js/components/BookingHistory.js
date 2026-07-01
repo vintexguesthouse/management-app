@@ -81,11 +81,11 @@ function _buildToolbarHTML(count) {
 
 function _buildRowHTML(row) {
   return `
-    <tr class="bh-row border-b border-gray-800 last:border-0 hover:bg-gray-800/40 transition-colors"
+    <tr class="bh-row border-b border-gray-800 last:border-0 hover:bg-gray-800/40 transition-all duration-200 hover:scale-[1.02] hover:shadow-xl"
         data-guest="${(row.guest_name ?? "").toLowerCase()}"
         data-room="${(row.room_name ?? "").toLowerCase()}">
       <td class="px-4 py-3 text-xs text-gray-400 font-mono whitespace-nowrap">${_fmtDate(row.date)}</td>
-      <td class="px-4 py-3 text-sm text-white font-medium">${row.guest_name}</td>
+      <td class="px-4 py-3 text-sm text-white font-semibold">${row.guest_name}</td>
       <td class="px-4 py-3 text-sm text-gray-300">${row.room_name}</td>
       <td class="px-4 py-3 text-sm text-emerald-400 font-mono font-semibold whitespace-nowrap">${_ksh(row.amount_paid)}</td>
       <td class="px-4 py-3 text-xs">

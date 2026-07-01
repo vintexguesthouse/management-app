@@ -145,7 +145,8 @@ function _buildCheckInForm(room) {
     <div class="px-5 py-4 border-t border-gray-800 space-y-2">
       <div id="ci-validation-msg" class="text-xs text-red-400 hidden mb-1"></div>
       <button id="btn-save-checkin" type="button"
-        class="w-full py-2.5 rounded-xl font-semibold text-sm bg-brand-600 hover:bg-brand-500 text-white
+        class="w-full py-2.5 rounded-xl font-semibold text-sm text-white bg-gradient-to-r from-brand-600 to-brand-500
+               hover:from-brand-500 hover:to-brand-400
                transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
         Save Check-In
       </button>
@@ -289,6 +290,7 @@ export function openModal(room, { onCheckIn, ownerMode }) {
   document.getElementById("modal-cancel-btn")?.addEventListener("click", closeModal);
 
   // Animate in
+  overlay.classList.add("backdrop-blur-sm", "bg-black/50");
   requestAnimationFrame(() => {
     overlay.classList.remove("hidden");
     requestAnimationFrame(() => {

@@ -93,7 +93,7 @@ export function renderRoomCard(room) {
     'room-card',
     'relative w-full text-left rounded-xl border bg-gray-900',
     'ring-2 p-4 cursor-pointer',
-    'transition-colors duration-150',
+    'transition-all duration-200 hover:scale-[1.02] hover:shadow-xl',
     theme.card,
     theme.ring,
   ].join(' ');
@@ -103,7 +103,7 @@ export function renderRoomCard(room) {
     <span class="absolute top-3 right-3 flex items-center gap-1.5">
       <span class="relative flex h-2 w-2">
         ${isOccupied ? '' : `<span class="animate-ping absolute inline-flex h-full w-full rounded-full ${theme.dot} opacity-60"></span>`}
-        <span class="relative inline-flex rounded-full h-2 w-2 ${theme.dot}"></span>
+        <span class="relative inline-flex rounded-full h-2 w-2 status-dot-pulse ${theme.dot}"></span>
       </span>
     </span>
   `;

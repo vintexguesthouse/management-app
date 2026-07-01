@@ -77,7 +77,7 @@ function _buildReceiptHTML(room) {
         return `
           <div class="rct-item-line">
             <span>${si.name} x${qty}</span>
-            <span>${_ksh(lineTotal)}</span>
+            <span class="font-mono">${_ksh(lineTotal)}</span>
           </div>`;
       }).join('')
     : `<div class="rct-item-line"><span style="color:#888;font-style:italic">None</span><span>—</span></div>`;
@@ -97,14 +97,14 @@ function _buildReceiptHTML(room) {
     <p>Kimana, Kajiado County, Kenya</p>
     <p>Tel: +254 700 000 000</p>
     <hr class="rct-divider" />
-    <p><strong>OFFICIAL RECEIPT</strong></p>
+    <p><strong class="tracking-widest">OFFICIAL RECEIPT</strong></p>
     <p>No: ${_receiptNo()}</p>
     <p>Printed: ${_now()}</p>
   </div>
 
   <!-- GUEST INFO -->
   <p class="rct-section-label">Guest Details</p>
-  <div class="rct-row"><span class="label">Name</span><span class="value">${room.guest_name ?? '—'}</span></div>
+  <div class="rct-row"><span class="label">Name</span><span class="value font-semibold">${room.guest_name ?? '—'}</span></div>
   <div class="rct-row"><span class="label">Room</span><span class="value">${room.room_name}</span></div>
   <div class="rct-row"><span class="label">Type</span><span class="value">${room.room_type ?? '—'}</span></div>
   <div class="rct-row"><span class="label">Check-in</span><span class="value">${_fmtDate(room.check_in)}</span></div>
@@ -118,7 +118,7 @@ function _buildReceiptHTML(room) {
   <p class="rct-section-label">Room Charges</p>
   <div class="rct-row">
     <span class="label">Rate / night</span>
-    <span class="value">${_ksh(chargedRate)}</span>
+    <span class="value font-mono">${_ksh(chargedRate)}</span>
   </div>
   <div class="rct-row">
     <span class="label">Nights</span>
@@ -127,7 +127,7 @@ function _buildReceiptHTML(room) {
   ${discountHTML}
   <div class="rct-row" style="font-weight:600">
     <span class="label">Room subtotal</span>
-    <span class="value">${_ksh(roomTotal)}</span>
+    <span class="value font-mono">${_ksh(roomTotal)}</span>
   </div>
 
   <hr class="rct-divider" />
@@ -137,15 +137,15 @@ function _buildReceiptHTML(room) {
   ${shopItemsHTML}
   <div class="rct-row" style="font-weight:600;margin-top:3pt">
     <span class="label">Shop subtotal</span>
-    <span class="value">${_ksh(shopTotal)}</span>
+    <span class="value font-mono">${_ksh(shopTotal)}</span>
   </div>
 
   <hr class="rct-divider-solid" />
 
   <!-- GRAND TOTAL -->
   <div class="rct-total">
-    <span>TOTAL DUE</span>
-    <span>${_ksh(grandTotal)}</span>
+    <span class="tracking-widest">TOTAL DUE</span>
+    <span class="font-mono">${_ksh(grandTotal)}</span>
   </div>
 
   <hr class="rct-divider" />

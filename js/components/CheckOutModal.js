@@ -196,7 +196,8 @@ function _buildCheckOutPanel(room) {
         Download PDF / Print Receipt
       </button>
       <button id="btn-checkout" type="button"
-        class="w-full py-2.5 rounded-xl font-semibold text-sm bg-red-700 hover:bg-red-600 text-white transition-colors">
+        class="w-full py-2.5 rounded-xl font-semibold text-sm text-white bg-gradient-to-r from-red-700 to-red-600
+               hover:from-red-600 hover:to-red-500 transition-colors">
         Check Out
       </button>
       <button id="modal-cancel-btn" type="button"
@@ -298,6 +299,7 @@ export function openModal(room, { onAddShop, onCheckOut }) {
   document.getElementById("modal-cancel-btn")?.addEventListener("click", closeModal);
 
   // Animate in
+  overlay.classList.add("backdrop-blur-sm", "bg-black/50");
   requestAnimationFrame(() => {
     overlay.classList.remove("hidden");
     requestAnimationFrame(() => {
