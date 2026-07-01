@@ -97,7 +97,6 @@ export async function addShopItem(airtableId, payload) {
       body: JSON.stringify({
         fields: {
           shop_charge: payload.new_shop_total,
-          grand_total: payload.new_grand_total
         }
       }),
     });
