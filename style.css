@@ -197,3 +197,33 @@ body.drawer-open {
   /* 14. Hide interactive chrome in any case */
   .no-print { display: none !important; }
 }
+
+
+/* ─────────────────────────────────────────────────────
+   MOBILE PRINT FIXES
+   Ensures receipts show up instead of blank pages
+───────────────────────────────────────────────────── */
+@media print {
+  /* 1. Hide the entire UI dashboard */
+  body > *:not(#receipt-print-layer) {
+    display: none !important;
+  }
+
+  /* 2. Reset the print layer to fill the page */
+  #receipt-print-layer {
+    display: block !important;
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 80mm !important; /* Matches standard thermal paper width */
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  /* 3. Ensure no overflow breaks the layout */
+  html, body {
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+  }
+}
