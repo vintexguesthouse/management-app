@@ -9,25 +9,21 @@ const getHeaders = () => ({
 });
 
 // This replaces your existing function at the top of api.js
-function _handleError(err, response = null) {
-  // 1. Get the basic error message
+// Make the function async
+async function _handleError(err, response = null) {
   let message = err instanceof Error ? err.message : String(err ?? 'Unknown error');
   
-  // 2. If a response object was provided, extract the hidden details from Airtable
   if (response) {
-    // We use a self-invoking async function inside to read the JSON safely
-    (async () => {
-      try {
-        const errorBody = await response.json();
-        console.error('--- AIRTABLE ERROR DETAILS ---');
-        console.error(JSON.stringify(errorBody, null, 2)); 
-      } catch (e) {
-        console.error('Could not parse error response');
-      }
-    })();
+    try {
+      // Await the parsing to ensure it finishes before we continue
+      const errorBody = await response.json();
+      console.error('--- AIRTABLE ERROR DETAILS ---');
+      console.error(JSON.stringify(errorBody, null, 2)); 
+    } catch (e) {
+      console.error('Could not parse error response:', e);
+    }
   }
   
-  // 3. Log the message like normal
   console.error('[Vintex API]', message);
   return { ok: false, error: message };
 }
