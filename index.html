@@ -106,7 +106,7 @@
 
               <button
                 type="submit"
-                class="w-full bg-brand-600 hover:bg-brand-500 text-white font-semibold py-3 px-4 rounded-xl shadow-md transition-colors duration-150 text-sm">
+                class="w-full bg-gradient-to-r from-brand-600 to-brand-500 hover:from-brand-500 hover:to-brand-400 text-white font-semibold py-3 px-4 rounded-xl shadow-md transition-colors duration-150 text-sm">
                 Unlock Dashboard
               </button>
             </form>
@@ -309,8 +309,6 @@
                      0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
               </svg>
             </button>
-
-
           </div>
         </header>
 
@@ -414,7 +412,7 @@
                   <button
                     id="btn-save-expense"
                     type="button"
-                    class="px-5 py-2.5 rounded-xl font-semibold text-sm bg-brand-600 hover:bg-brand-500 text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+                    class="px-5 py-2.5 rounded-xl font-semibold text-sm bg-gradient-to-r from-brand-600 to-brand-500 hover:from-brand-500 hover:to-brand-400 text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
                     Save Expense
                   </button>
                   <div id="expense-saving-indicator" class="hidden text-xs text-gray-500 flex items-center gap-1.5">
@@ -464,6 +462,67 @@
             </div>
           </div>
           <!-- /view-expenses -->
+
+          <!-- BOOKING HISTORY VIEW (hidden until tab is clicked) -->
+          <div id="view-history" class="hidden">
+            <div class="flex items-center justify-between mb-4">
+              <h2 class="text-base font-semibold text-white">
+                Booking History
+                <span id="history-scope-label" class="text-xs font-normal text-gray-500 ml-2"></span>
+              </h2>
+              <div
+                id="history-total-badge"
+                class="text-xs font-mono font-semibold text-brand-300 bg-brand-900/20 border border-brand-800/30 rounded-full px-3 py-1"></div>
+            </div>
+
+            <!-- Glassmorphism wrapper for the history table -->
+            <div
+              class="relative bg-gray-900/60 backdrop-blur-xl border border-gray-700/50 rounded-xl shadow-xl overflow-hidden">
+              <!-- Horizontal scroll wrapper keeps the table usable on mobile without breaking the card edges -->
+              <div class="overflow-x-auto">
+                <table class="w-full text-sm text-left border-collapse">
+                  <thead>
+                    <tr class="border-b border-gray-800">
+                      <th class="px-5 py-3 text-xs font-semibold uppercase tracking-wider text-gray-500 whitespace-nowrap">
+                        Guest
+                      </th>
+                      <th class="px-5 py-3 text-xs font-semibold uppercase tracking-wider text-gray-500 whitespace-nowrap">
+                        Room
+                      </th>
+                      <th class="px-5 py-3 text-xs font-semibold uppercase tracking-wider text-gray-500 whitespace-nowrap">
+                        Check-in
+                      </th>
+                      <th class="px-5 py-3 text-xs font-semibold uppercase tracking-wider text-gray-500 whitespace-nowrap">
+                        Check-out
+                      </th>
+                      <th class="px-5 py-3 text-xs font-semibold uppercase tracking-wider text-gray-500 whitespace-nowrap text-right">
+                        Amount
+                      </th>
+                      <th class="px-5 py-3 text-xs font-semibold uppercase tracking-wider text-gray-500 whitespace-nowrap text-right">
+                        Status
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody id="history-container" class="divide-y divide-gray-800">
+                    <!-- Booking history rows injected by main.js renderHistory() -->
+                  </tbody>
+                </table>
+              </div>
+
+              <!-- Empty state — shown by main.js when no history rows exist -->
+              <div id="history-empty-state" class="hidden flex flex-col items-center justify-center py-16 gap-3 text-center">
+                <svg class="w-10 h-10 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="1.5"
+                    d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <p class="text-sm text-gray-600">No booking history yet.</p>
+              </div>
+            </div>
+          </div>
+          <!-- /view-history -->
         </div>
         <!-- /page-content -->
       </main>
@@ -542,7 +601,7 @@
         <div class="flex gap-3 pt-1">
           <button
             id="btn-save-edit-expense"
-            class="flex-1 py-2.5 rounded-xl font-semibold text-sm bg-brand-600 hover:bg-brand-500 text-white transition-colors">
+            class="flex-1 py-2.5 rounded-xl font-semibold text-sm bg-gradient-to-r from-brand-600 to-brand-500 hover:from-brand-500 hover:to-brand-400 text-white transition-colors">
             Save Changes
           </button>
           <button
