@@ -31,16 +31,16 @@ import {
 } from "./services/state.js";
 
 // ADDED: Added clean Airtable CRUD operations here
-import { 
-  fetchRooms, 
-  fetchBookings, 
-  checkIn, 
-  addShopItem, 
-  checkOut, 
-  fetchExpenses, 
-  addExpenseAPI, 
-  patchExpenseAPI, 
-  deleteExpenseAPI 
+import {
+  fetchRooms,
+  fetchBookings,
+  checkIn,
+  addShopItem,
+  checkOut,
+  fetchExpenses,
+  addExpenseAPI,
+  patchExpenseAPI,
+  deleteExpenseAPI
 } from "./services/api.js";
 
 import { initAuthGate, getActiveUser, getActiveRole } from "./services/auth.js";
@@ -194,10 +194,10 @@ function _switchView(view) {
   if (statsBar) {
     statsBar.style.display = view === "dashboard" ? "" : "none";
   }
-  
+
   if (view === "history") {
-  _renderHistoryView();
-}
+    _renderHistoryView();
+  }
 
   document.querySelectorAll(".nav-link").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.view === view);
@@ -330,9 +330,7 @@ function _wireRoomFilterBar() {
 function _mergeData(rooms, bookings) {
   const roomsByName = new Map((rooms ?? []).map((r) => [r.room_name, r]));
   const activeBookingsByRoom = new Map();
-  (bookings ?? [])
-    .filter((b) => b.is_active === true)
-    .forEach((b) => activeBookingsByRoom.set(b.room_name, b));
+  (bookings ?? []).filter((b) => b.is_active === true).forEach((b) => activeBookingsByRoom.set(b.room_name, b));
 
   const { rooms: currentState } = getState();
 
@@ -403,7 +401,7 @@ async function _loadRooms() {
 
 async function _loadExpenses() {
   setState({ ui: { ...getState().ui, expensesLoading: true } }, "loadExpenses");
-  
+
   const result = await fetchExpenses();
 
   if (result.ok && Array.isArray(result.expenses)) {
@@ -566,11 +564,13 @@ function _wireExpensesForm() {
 
     saveBtn.disabled = true;
     if (indicator) indicator.classList.remove("hidden");
-    
-    setSyncStatus('saving');
+
+    setSyncStatus("saving");
     const activeUser = getActiveUser();
 
     try {
+      // Debug: Check the exact structure before it is stringified
+      console.table(payload);
       // CHANGED: Linked directly to airtable API creation engine
       const result = await addExpenseAPI({
         amount,
@@ -581,8 +581,8 @@ function _wireExpensesForm() {
       });
 
       if (result.ok) {
-        setSyncStatus('synced');
-        
+        setSyncStatus("synced");
+
         addExpense({
           expense_id: result.expense_id ?? `local_${Date.now()}`,
           amount,
@@ -599,7 +599,7 @@ function _wireExpensesForm() {
         showToast("success", "Expense saved", `${_ksh(amount)} — ${category}`);
         _renderExpenses();
       } else {
-        setSyncStatus('error');
+        setSyncStatus("error");
         if (errorBox) {
           errorBox.textContent = result.error ?? "Failed to save expense.";
           errorBox.classList.remove("hidden");
@@ -607,7 +607,7 @@ function _wireExpensesForm() {
         showToast("error", "Save failed", result.error);
       }
     } catch (err) {
-      setSyncStatus('error');
+      setSyncStatus("error");
       if (errorBox) {
         errorBox.textContent = err.message;
         errorBox.classList.remove("hidden");
@@ -782,29 +782,29 @@ async function _handleCheckIn(formData) {
 
   closeCheckInModal();
   showToast("info", "Saving check-in…", formData.guest_name);
-  
+
   // Define the payload for Airtable
   const airtablePayload = {
-    "room_name": formData.room_name,
-    "guest_name": formData.guest_name,
-    "nights": Number(formData.nights),
-    "check_in": new Date().toISOString().split('T')[0], // This sends "2026-06-30" instead of the full timestamp
-    "room_type": formData.room_type,
-    "base_rate": Number(formData.base_rate),
-    "charged_rate": Number(formData.charged_rate),
-    "shop_charge": 0,
-    "payment_status": formData.payment_status ?? "unpaid",
-    "is_active": true,
-    "created_by": created_by
+    room_name: formData.room_name,
+    guest_name: formData.guest_name,
+    nights: Number(formData.nights),
+    check_in: new Date().toISOString().split("T")[0], // This sends "2026-06-30" instead of the full timestamp
+    room_type: formData.room_type,
+    base_rate: Number(formData.base_rate),
+    charged_rate: Number(formData.charged_rate),
+    shop_charge: 0,
+    payment_status: formData.payment_status ?? "unpaid",
+    is_active: true,
+    created_by: created_by
   };
 
   // Perform the API call using the clean payload
   const result = await checkIn(airtablePayload);
-  
+
   // REMOVED THE DUPLICATE: const result = await checkIn({ ...formData, created_by });
 
   if (result.ok) {
-    setSyncStatus('synced');
+    setSyncStatus("synced");
     if (result.booking_id) {
       const { rooms } = getState();
       const current = rooms.find((r) => r.room_name === formData.room_name);
@@ -813,10 +813,10 @@ async function _handleCheckIn(formData) {
         activeBooking: { ...(current?.activeBooking ?? {}), airtable_id: result.booking_id }
       });
     }
-    showToast('success', 'Checked in!', `${formData.room_name} → ${formData.guest_name}`);
+    showToast("success", "Checked in!", `${formData.room_name} → ${formData.guest_name}`);
     setTimeout(_loadRooms, 3000);
   } else {
-    setSyncStatus('error');
+    setSyncStatus("error");
     patchRoom(formData.room_name, {
       status: "available",
       guest_name: null,
@@ -844,8 +844,7 @@ async function _handleAddShop({ item_name, item_price, quantity }) {
   const lineTotal = item_price * quantity;
   const prevShopTotal = Number(activeRoom.shop_total ?? 0);
   const newShopTotal = prevShopTotal + lineTotal;
-  const roomSubtotal =
-    Number(activeRoom.charged_rate ?? activeRoom.base_rate ?? 0) * Number(activeRoom.nights ?? 1);
+  const roomSubtotal = Number(activeRoom.charged_rate ?? activeRoom.base_rate ?? 0) * Number(activeRoom.nights ?? 1);
   const newGrandTotal = roomSubtotal + newShopTotal;
 
   const result = await addShopItem(activeRoom.booking_id, {
@@ -978,7 +977,7 @@ async function _init() {
     _loadRooms();
     _loadExpenses();
   }, 30 * 1000);
-  
+
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") {
       _loadRooms();
@@ -1009,19 +1008,18 @@ function _renderSyncIndicator(status) {
   icon.title = `Status: ${status}`;
 }
 
-
 // Import the component
 import { renderBookingHistory } from "./components/BookingHistory.js";
 
 async function _renderHistoryView() {
   const container = document.getElementById("history-container");
   if (!container) return;
-  
+
   container.innerHTML = '<p class="text-gray-500 text-center py-10">Loading history...</p>';
-  
+
   // Reuse the existing fetchBookings API call
   const result = await fetchBookings();
-  
+
   if (result.ok) {
     // Pass the raw bookings array to the component
     renderBookingHistory(result.bookings);
@@ -1034,5 +1032,5 @@ async function _renderHistoryView() {
 // Add this helper function at the bottom of main.js
 // ─────────────────────────────────────────────────────
 function _cleanDate(isoString) {
-  return isoString.split('T')[0]; // Converts 2026-07-01T12:00:00Z to 2026-07-01
+  return isoString.split("T")[0]; // Converts 2026-07-01T12:00:00Z to 2026-07-01
 }

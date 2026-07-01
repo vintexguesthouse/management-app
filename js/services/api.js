@@ -8,6 +8,12 @@ const getHeaders = () => ({
   'Content-Type': 'application/json'
 });
 
+// Add this helper function at the top of api.js
+function _logPayload(action, payload) {
+  console.log(`%c[Vintex API] Outgoing Request: ${action}`, "color: #007bff; font-weight: bold;");
+  console.log(JSON.stringify(payload, null, 2));
+}
+
 // This replaces your existing function at the top of api.js
 // Make the function async
 async function _handleError(err, response = null) {
@@ -119,6 +125,8 @@ export async function fetchExpenses() {
 
 // 7. ADD EXPENSE
 export async function addExpenseAPI(payload) {
+  _logPayload('POST /expenses', payload);
+  
   try {
     const response = await fetch(`${AIRTABLE_URL}/expenses`, {
       method: 'POST',
