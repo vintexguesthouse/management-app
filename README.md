@@ -1,1 +1,1 @@
-# management-app-v1
+# vintex-pms
