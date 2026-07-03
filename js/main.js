@@ -27,6 +27,7 @@ import {
   removeExpense,
   setActiveView,
   setSyncStatus,
+  clearSelection,
   on
 } from "./services/state.js";
 
@@ -740,7 +741,7 @@ function _onCardClick(room) {
   setActiveRoom(room);
 
   if (room.status === "available") {
-    openCheckInModal(room, {
+    openCheckInModal([room], {
       onCheckIn: _handleCheckIn,
       ownerMode: getActiveRole() === "owner"
     });
@@ -755,59 +756,87 @@ function _onCardClick(room) {
 // ─────────────────────────────────────────────────────
 // Check-in handler
 // ─────────────────────────────────────────────────────
-async function _handleCheckIn(formData) {
+async function _handleCheckIn(groupFormData) {
+  const { rooms: roomsData, payment_method, payment_reference } = groupFormData;
   const created_by = getActiveUser() ?? "unknown";
+  const isGroup = roomsData.length > 1;
+
+  // Payment is captured once, upfront, for the whole group via payments.js —
+  // treat it as settled at check-in time.
+  const paymentStatus = "paid";
+  const checkInTimestamp = new Date().toISOString();
+
   setSyncStatus("saving");
 
-  patchRoom(formData.room_name, {
-    status: "occupied",
-    guest_name: formData.guest_name,
-    nights: formData.nights,
-    room_type: formData.room_type,
-    charged_rate: formData.charged_rate,
-    payment_status: formData.payment_status ?? "unpaid",
-    check_in: new Date().toISOString(),
-    shop_total: 0,
-    shop_items: [],
-    activeBooking: {
-      room_name: formData.room_name,
+  // Optimistic UI update for every room in this check-in
+  roomsData.forEach((formData) => {
+    patchRoom(formData.room_name, {
+      status: "occupied",
       guest_name: formData.guest_name,
       nights: formData.nights,
       room_type: formData.room_type,
       charged_rate: formData.charged_rate,
-      payment_status: formData.payment_status ?? "unpaid",
-      check_in: new Date().toISOString(),
-      shop_charge: 0,
-      grand_total: formData.charged_rate * formData.nights,
-      is_active: true
-    }
+      payment_status: paymentStatus,
+      payment_method,
+      payment_reference,
+      check_in: checkInTimestamp,
+      shop_total: 0,
+      shop_items: [],
+      activeBooking: {
+        room_name: formData.room_name,
+        guest_name: formData.guest_name,
+        nights: formData.nights,
+        room_type: formData.room_type,
+        charged_rate: formData.charged_rate,
+        payment_status: paymentStatus,
+        payment_method,
+        payment_reference,
+        check_in: checkInTimestamp,
+        shop_charge: 0,
+        grand_total: formData.grand_total,
+        is_active: true
+      }
+    });
   });
 
   closeCheckInModal();
-  showToast("info", "Saving check-in…", formData.guest_name);
+  clearSelection();
 
-  // Define the payload for Airtable
-  const airtablePayload = {
-    room_name: formData.room_name,
-    guest_name: formData.guest_name,
-    nights: Number(formData.nights),
-    check_in: new Date().toISOString().split("T")[0], // This sends "2026-06-30" instead of the full timestamp
-    room_type: formData.room_type,
-    base_rate: Number(formData.base_rate),
-    charged_rate: Number(formData.charged_rate),
-    shop_charge: 0,
-    payment_status: formData.payment_status ?? "unpaid",
-    is_active: true,
-    created_by: created_by
-  };
+  const guestLabel = roomsData[0]?.guest_name ?? "guest";
+  showToast(
+    "info",
+    isGroup ? `Saving check-in for ${roomsData.length} rooms…` : "Saving check-in…",
+    guestLabel
+  );
 
-  // Perform the API call using the clean payload
-  const result = await checkIn(airtablePayload);
+  // Fire one Airtable checkIn call per room, in parallel.
+  const results = await Promise.all(
+    roomsData.map(async (formData) => {
+      const airtablePayload = {
+        room_name: formData.room_name,
+        guest_name: formData.guest_name,
+        nights: Number(formData.nights),
+        check_in: checkInTimestamp.split("T")[0], // This sends "2026-06-30" instead of the full timestamp
+        room_type: formData.room_type,
+        base_rate: Number(formData.base_rate),
+        charged_rate: Number(formData.charged_rate),
+        shop_charge: 0,
+        payment_status: paymentStatus,
+        payment_method,
+        payment_reference,
+        is_active: true,
+        created_by
+      };
 
-  // REMOVED THE DUPLICATE: const result = await checkIn({ ...formData, created_by });
+      const result = await checkIn(airtablePayload);
+      return { formData, result };
+    })
+  );
 
-  if (result.ok) {
-    setSyncStatus("synced");
+  const succeeded = results.filter((r) => r.result.ok);
+  const failed = results.filter((r) => !r.result.ok);
+
+  succeeded.forEach(({ formData, result }) => {
     if (result.booking_id) {
       const { rooms } = getState();
       const current = rooms.find((r) => r.room_name === formData.room_name);
@@ -816,22 +845,43 @@ async function _handleCheckIn(formData) {
         activeBooking: { ...(current?.activeBooking ?? {}), airtable_id: result.booking_id }
       });
     }
-    showToast("success", "Checked in!", `${formData.room_name} → ${formData.guest_name}`);
-    setTimeout(_loadRooms, 3000);
-  } else {
-    setSyncStatus("error");
+  });
+
+  failed.forEach(({ formData }) => {
     patchRoom(formData.room_name, {
       status: "available",
       guest_name: null,
       nights: null,
       charged_rate: null,
       payment_status: null,
+      payment_method: null,
+      payment_reference: null,
       check_in: null,
       booking_id: null,
       activeBooking: null
     });
-    showToast("error", "Check-in failed", result.error);
+  });
+
+  if (failed.length === 0) {
+    setSyncStatus("synced");
+    showToast(
+      "success",
+      "Checked in!",
+      isGroup ? `${roomsData.length} rooms → ${guestLabel}` : `${roomsData[0].room_name} → ${guestLabel}`
+    );
+  } else if (succeeded.length === 0) {
+    setSyncStatus("error");
+    showToast("error", "Check-in failed", failed[0].result.error);
+  } else {
+    setSyncStatus("error");
+    showToast(
+      "error",
+      "Partial check-in failure",
+      `${failed.length} of ${roomsData.length} room(s) failed to save.`
+    );
   }
+
+  setTimeout(_loadRooms, 3000);
 }
 
 // ─────────────────────────────────────────────────────
@@ -881,7 +931,7 @@ async function _handleAddShop({ item_name, item_price, quantity }) {
 // Checkout handler
 // ─────────────────────────────────────────────────────
 
-async function _handleCheckOut({ payment_method, mpesa_code } = {}) {
+async function _handleCheckOut({ payment_method, payment_reference } = {}) {
   const { activeRoom } = getState();
   if (!activeRoom) return;
 
@@ -899,7 +949,7 @@ async function _handleCheckOut({ payment_method, mpesa_code } = {}) {
 
   const result = await checkOut(activeRoom.booking_id, {
     payment_method: payment_method ?? activeRoom.payment_method ?? null,
-    mpesa_code: mpesa_code ?? activeRoom.mpesa_code ?? null
+    payment_reference: payment_reference ?? activeRoom.payment_reference ?? null
   });
 
   if (result.ok) {
@@ -924,6 +974,68 @@ async function _handleCheckOut({ payment_method, mpesa_code } = {}) {
 }
 
 // ─────────────────────────────────────────────────────
+// Multi-select floating action bar (group check-in)
+// ─────────────────────────────────────────────────────
+
+function _renderMultiSelectBar(selectedRooms) {
+  let bar = document.getElementById("multi-select-bar");
+
+  if (!selectedRooms || selectedRooms.length === 0) {
+    bar?.remove();
+    return;
+  }
+
+  if (!bar) {
+    bar = document.createElement("div");
+    bar.id = "multi-select-bar";
+    bar.className =
+      "fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 " +
+      "bg-gray-900 border border-brand-600 rounded-2xl shadow-2xl px-5 py-3 animate-fade-in";
+    document.body.appendChild(bar);
+  }
+
+  const count = selectedRooms.length;
+  const label = `${count} room${count !== 1 ? "s" : ""}`;
+
+  bar.innerHTML = `
+    <span class="text-sm font-semibold text-white">${label} selected</span>
+    <button id="btn-group-checkin" type="button"
+      class="px-4 py-2 rounded-xl text-sm font-semibold text-white bg-gradient-to-r from-brand-600 to-brand-500
+             hover:from-brand-500 hover:to-brand-400 transition-colors">
+      Check In ${label}
+    </button>
+    <button id="btn-cancel-selection" type="button" title="Clear selection"
+      class="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white transition-colors">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+      </svg>
+    </button>
+  `;
+
+  document.getElementById("btn-group-checkin").onclick = () => {
+    const { rooms } = getState();
+    const roomsToCheckIn = rooms.filter(
+      (r) => selectedRooms.includes(r.room_name) && r.status === "available"
+    );
+
+    if (roomsToCheckIn.length === 0) {
+      showToast("error", "No rooms to check in", "Selected rooms are no longer available.");
+      clearSelection();
+      return;
+    }
+
+    openCheckInModal(roomsToCheckIn, {
+      onCheckIn: _handleCheckIn,
+      ownerMode: getActiveRole() === "owner"
+    });
+  };
+
+  document.getElementById("btn-cancel-selection").onclick = () => {
+    clearSelection();
+  };
+}
+
+// ─────────────────────────────────────────────────────
 // State subscription → re-render
 // ─────────────────────────────────────────────────────
 
@@ -945,8 +1057,14 @@ function _subscribeToState() {
     }
 
     if (changedKeys.includes("ui")) {
-      const { ui } = getState();
+      const { ui, rooms } = getState();
       _renderSyncIndicator(ui.syncStatus);
+      _renderMultiSelectBar(ui.selectedRooms ?? []);
+
+      // Selection state is drawn as a ring on each card, so re-render
+      // the grid whenever ui changes to keep cards in sync.
+      renderRoomsGrid(rooms, _onCardClick);
+      _applyRoomFilter(_activeRoomFilter);
     }
   });
 }

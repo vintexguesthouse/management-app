@@ -12,6 +12,11 @@
  *  - Added `expenses: []` to the root state tree.
  *  - Added setExpenses(), addExpense(), patchExpense(),
  *    removeExpense() convenience mutators.
+ *
+ * v3 changes:
+ *  - Added `ui.selectedRooms: []` and `ui.isMultiSelectMode: false`
+ *    to support multi-room group check-in.
+ *  - Added toggleRoomSelection(), clearSelection() mutators.
  */
 
 /** @type {Map<string, Function[]>} event → listeners */
@@ -67,6 +72,8 @@ const _state = {
     modalOpen: false,
     activeView: 'dashboard',  // 'dashboard' | 'expenses'
     syncStatus: 'synced',
+    selectedRooms: [],        // room_name[] currently selected for group check-in
+    isMultiSelectMode: false, // true once at least one room has been selected
   },
 
   /**
@@ -263,4 +270,51 @@ export function setActiveView(view) {
 export function setSyncStatus(status) {
   // We keep the existing UI state (..._state.ui) and just overwrite syncStatus
   setState({ ui: { ..._state.ui, syncStatus: status } }, 'setSyncStatus');
+}
+
+// ─────────────────────────────────────────────────────
+// Multi-select convenience mutators (group check-in)
+// ─────────────────────────────────────────────────────
+
+/**
+ * Adds or removes a room from the current selection by room_name.
+ * Also keeps isMultiSelectMode in sync: true whenever at least one
+ * room is selected, false again once the selection is emptied.
+ * @param {string} roomName
+ */
+export function toggleRoomSelection(roomName) {
+  const current = _state.ui.selectedRooms ?? [];
+  const isSelected = current.includes(roomName);
+  const selectedRooms = isSelected
+    ? current.filter((name) => name !== roomName)
+    : [...current, roomName];
+
+  setState(
+    {
+      ui: {
+        ..._state.ui,
+        selectedRooms,
+        isMultiSelectMode: selectedRooms.length > 0
+      }
+    },
+    'toggleRoomSelection'
+  );
+}
+
+/**
+ * Clears the room selection and exits multi-select mode.
+ * Called after a successful group check-in, or when the
+ * person cancels out of the floating action bar.
+ */
+export function clearSelection() {
+  setState(
+    {
+      ui: {
+        ..._state.ui,
+        selectedRooms: [],
+        isMultiSelectMode: false
+      }
+    },
+    'clearSelection'
+  );
 }

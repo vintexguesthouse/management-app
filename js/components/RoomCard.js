@@ -12,6 +12,8 @@
  *  - renderRoomsGrid(rooms, onCardClick) → void  (injects into #rooms-grid)
  */
 
+import { getState, toggleRoomSelection } from '../services/state.js';
+
 // ─────────────────────────────────────────────────────
 // Constants
 // ─────────────────────────────────────────────────────
@@ -83,19 +85,22 @@ export function renderRoomCard(room) {
   const isOccupied = room.status === 'occupied';
   const typeLabel  = ROOM_TYPE_LABELS[room.room_type] ?? room.room_type;
 
+  const { ui } = getState();
+  const isSelected = (ui.selectedRooms ?? []).includes(room.room_name);
+
   const card = document.createElement('button');
   card.type  = 'button';
   card.dataset.roomName = room.room_name;
   card.dataset.status   = room.status;
-  card.setAttribute('aria-label', `${room.room_name} — ${room.status}`);
+  card.setAttribute('aria-label', `${room.room_name} — ${room.status}${isSelected ? ' — selected' : ''}`);
 
   card.className = [
     'room-card',
     'relative w-full text-left rounded-xl border bg-gray-900',
-    'ring-2 p-4 cursor-pointer',
+    isSelected ? 'ring-4 ring-blue-500' : `ring-2 ${theme.ring}`,
+    'p-4 cursor-pointer',
     'transition-all duration-200 hover:scale-[1.02] hover:shadow-xl',
     theme.card,
-    theme.ring,
   ].join(' ');
 
   // ── Status dot ──
@@ -186,7 +191,23 @@ export function renderRoomsGrid(rooms, onCardClick) {
 
   for (const room of rooms) {
     const card = renderRoomCard(room);
-    card.addEventListener('click', () => onCardClick(room));
+
+    card.addEventListener('click', () => {
+      const { ui } = getState();
+      if (ui.isMultiSelectMode) {
+        // Only available rooms can join a group check-in selection.
+        if (room.status === 'available') toggleRoomSelection(room.room_name);
+        return;
+      }
+      onCardClick(room);
+    });
+
+    // Double-click enters multi-select mode by selecting the first room.
+    card.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      if (room.status === 'available') toggleRoomSelection(room.room_name);
+    });
+
     grid.appendChild(card);
   }
 }
