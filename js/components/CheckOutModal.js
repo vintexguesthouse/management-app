@@ -467,12 +467,13 @@ function _wireCheckOutPanel() {
     validationMsg.classList.add("hidden");
 
     _onCheckOutCallback?.({
-      rooms: _activeGroup.map((room) => ({
-        room_name: room.room_name,
-        booking_id: room.booking_id
-      })),
+      // Pass the rooms separately so main.js knows which IDs to patch
+      rooms: _activeGroup.map((room) => room.booking_id),
+
+      // Pass the payment details flat, so they can be merged into the PATCH payload
       payment_method: paymentMethod,
-      payment_reference: reference || null
+      payment_reference: reference || null,
+      payment_status: "paid" // Ensure this is included!
     });
   });
 }
@@ -499,7 +500,7 @@ function _wireCheckOutPanel() {
  */
 export function openModal(room, callbacks) {
   const { onAddShop, onCheckOut, getRelatedRooms, getAvailableRooms } = callbacks;
-  
+
   const modal = document.getElementById("checkout-modal");
   const overlay = document.getElementById("modal-overlay");
   if (!modal || !overlay) return;
@@ -547,7 +548,7 @@ export function openModal(room, callbacks) {
  * so the next open starts clean.
  */
 export function closeModal() {
-  const modal = document.getElementById("checkin-modal");
+  const modal = document.getElementById("checkout-modal");
   const overlay = document.getElementById("modal-overlay");
   if (!modal || !overlay) return;
 

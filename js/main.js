@@ -938,47 +938,57 @@ async function _handleAddShop({ item_name, item_price, quantity }) {
 // Checkout handler
 // ─────────────────────────────────────────────────────
 
-async function _handleCheckOut({ payment_method, payment_reference } = {}) {
-  const { activeRoom } = getState();
-  if (!activeRoom) return;
+async function _handleCheckOut(payload) {
+  console.log("Processing Group Checkout:", payload);
 
-  const isPrePaid = activeRoom.payment_status === "paid";
-  const accommodationTotal = isPrePaid ? 0 : Number(activeRoom.charged_rate ?? 0) * Number(activeRoom.nights ?? 1);
-  const shopTotal = Number(activeRoom.shop_total ?? 0);
-  const grandTotal = accommodationTotal + shopTotal;
+  const { rooms, payment_method, payment_reference, payment_status } = payload;
+  
+  if (!rooms || rooms.length === 0) return;
 
-  printReceipt({
-    ...activeRoom,
-    accommodation_total: accommodationTotal,
-    grand_total: grandTotal
-  });
-  showToast("info", "Checking out…", activeRoom.room_name);
+  showToast("info", `Checking out ${rooms.length} rooms...`);
 
-  const result = await checkOut(activeRoom.booking_id, {
-    payment_method: payment_method ?? activeRoom.payment_method ?? null,
-    payment_reference: payment_reference ?? activeRoom.payment_reference ?? null
-  });
-
-  if (result.ok) {
-    patchRoom(activeRoom.room_name, {
-      status: "available",
-      guest_name: null,
-      check_in: null,
-      booking_id: null,
-      charged_rate: null,
-      payment_status: null,
-      shop_total: 0,
-      shop_items: [],
-      nights: null,
-      activeBooking: null
+  // 1. Process API updates for every room in the group
+  for (const bookingId of rooms) {
+    const result = await checkOut(bookingId, {
+      payment_method: payment_method,
+      payment_reference: payment_reference,
+      payment_status: payment_status
     });
-    closeCheckOutModal();
-    showToast("success", "Checked out!", `${activeRoom.room_name} is now available.`);
-    await _loadRooms();
-  } else {
-    showToast("error", "Check-out failed", result.error);
+
+    if (!result.ok) {
+      showToast("error", "Check-out failed for one or more rooms", result.error);
+      return; // Stop if any single request fails
+    }
   }
+
+  // 2. Update local state for all rooms processed
+  // We use the rooms array (IDs) to find which rooms to clear in our local state
+  const stateRooms = getState().rooms;
+  
+  for (const bookingId of rooms) {
+    const roomToClear = stateRooms.find(r => r.booking_id === bookingId);
+    if (roomToClear) {
+      patchRoom(roomToClear.room_name, {
+        status: "available",
+        guest_name: null,
+        check_in: null,
+        booking_id: null,
+        charged_rate: null,
+        payment_status: null,
+        shop_total: 0,
+        shop_items: [],
+        nights: null,
+        activeBooking: null
+      });
+    }
+  }
+
+  // 3. Finalize
+  closeCheckOutModal();
+  showToast("success", "Checked out!", "All rooms are now available.");
+  await _loadRooms(); // Refresh the list from the source of truth
 }
+
 
 // ─────────────────────────────────────────────────────
 // Multi-select floating action bar (group check-in)
