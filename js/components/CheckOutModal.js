@@ -365,6 +365,20 @@ function _refreshRoomsSection() {
   }
 
   _wireAddRoomRow();
+
+  // 2. IMPORTANT: Re-wire the "Remove" buttons
+  // You need this function to exist to handle clicks on the delete icons
+  _wireRemoveRoomButtons();
+}
+
+function _wireRemoveRoomButtons() {
+  document.querySelectorAll(".btn-remove-room").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      const roomName = e.target.closest("button").dataset.room;
+      _activeGroup = _activeGroup.filter((r) => r.room_name !== roomName);
+      _refreshRoomsSection(); // Recursively refresh to update UI and re-wire
+    });
+  });
 }
 
 // ─────────────────────────────────────────────────────
@@ -379,11 +393,15 @@ function _wireAddRoomRow() {
 
   addBtn.addEventListener("click", () => {
     const roomName = addSelect.value;
+    console.log("Attempting to add room:", roomName);
     if (!roomName || _activeGroupNames().includes(roomName)) return;
 
     const candidates = _getRelatedRoomsCallback?.(_anchor, _activeGroupNames()) ?? [];
     const room = candidates.find((r) => r.room_name === roomName);
-    if (!room) return;
+    if (!room) {
+    console.log("Room not found in candidates list!");
+    return;
+  }
 
     _activeGroup.push(room);
     _refreshRoomsSection();
