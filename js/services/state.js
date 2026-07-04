@@ -17,7 +17,25 @@
  *  - Added `ui.selectedRooms: []` and `ui.isMultiSelectMode: false`
  *    to support multi-room group check-in.
  *  - Added toggleRoomSelection(), clearSelection() mutators.
+ *
+ * v4 changes (dynamic group bookings / bulk API):
+ *  - Room shape gains `Client_Booking_Ref` — a group-level tag shared
+ *    by every room in the same bulk check-in, distinct from
+ *    `booking_id` (the per-room Airtable record id). This is what
+ *    lets CheckOutModal_2's "Add Room" dropdown find siblings of a
+ *    group booking even though each room has its own booking_id.
+ *  - Room `status` gains an 'error' value, for rooms whose write
+ *    failed inside a partial bulkCheckIn.
+ *  - Added getRoomByName(), getAvailableRooms(), getRelatedRooms()
+ *    read selectors — main.js hands these to the modals as the
+ *    getAvailableRooms / getRelatedRooms callbacks so the modals
+ *    never import state.js directly.
+ *  - Added bulkPatchRooms() and markRoomsError() mutators so
+ *    reconciling a bulkCheckIn (or a group checkOut) response updates
+ *    every affected room in a single "change" emit instead of one
+ *    emit per room.
  */
+
 
 /** @type {Map<string, Function[]>} event → listeners */
 const _listeners = new Map();
@@ -31,15 +49,22 @@ const _state = {
    *   room_name:    string,
    *   room_type:    string,          // "Bed & Breakfast" | "Bed Only"
    *   base_rate:    number,          // Master rate in KSH
-   *   status:       string,          // "available" | "occupied"
+   *   status:       string,          // "available" | "occupied" | "error"
    *   guest_name:   string | null,
    *   check_in:     string | null,   // ISO date string
-   *   booking_id:   string | null,
+   *   booking_id:   string | null,   // this room's OWN Airtable booking record id
+   *   Client_Booking_Ref: string | null,
+   *     // Group-level tag shared by every room written in the same
+   *     // bulkCheckIn call. Two rooms with the same booking_id are the
+   *     // same room; two rooms with the same Client_Booking_Ref are the
+   *     // same STAY. Null for legacy/solo bookings created before this
+   *     // field existed, or via the single checkIn() path.
    *   charged_rate: number | null,
    *   shop_total:   number | null,
    *   shop_items:   Array  | null,   // [{name, qty, unit_price}]
    *   nights:       number | null,
    *   payment_status: string | null, // "unpaid" | "paid" — set at check-in
+   *   error:        string | null,   // set when status === "error"
    * }
    */
   rooms: [],
@@ -198,6 +223,100 @@ export function patchRoom(roomName, patch) {
       'patchRoom:active'
     );
   }
+}
+
+/**
+ * Merges a different patch into each of several rooms in a SINGLE
+ * "change" emit, instead of calling patchRoom() in a loop (which would
+ * fire one "change" event — and one grid re-render — per room).
+ * Used by main.js to reconcile a bulkCheckIn response: successful
+ * rooms get their booking_id / Client_Booking_Ref written in, failed
+ * rooms get marked 'error', all in one state update.
+ *
+ * @param {Object.<string, Object>} patchesByRoomName - room_name -> patch
+ */
+export function bulkPatchRooms(patchesByRoomName) {
+  if (!patchesByRoomName || Object.keys(patchesByRoomName).length === 0) return;
+
+  const rooms = _state.rooms.map((r) =>
+    patchesByRoomName[r.room_name] ? { ...r, ...patchesByRoomName[r.room_name] } : r
+  );
+  setState({ rooms }, 'bulkPatchRooms');
+
+  const activeName = _state.activeRoom?.room_name;
+  if (activeName && patchesByRoomName[activeName]) {
+    setState(
+      { activeRoom: { ..._state.activeRoom, ...patchesByRoomName[activeName] } },
+      'bulkPatchRooms:active'
+    );
+  }
+}
+
+/**
+ * Convenience wrapper over bulkPatchRooms() for the failure side of a
+ * partial bulkCheckIn / group checkout: flags each named room 'error'
+ * with an optional message, in one state update.
+ *
+ * @param {string[]} roomNames
+ * @param {string|null} [errorMessage]
+ */
+export function markRoomsError(roomNames, errorMessage = null) {
+  if (!Array.isArray(roomNames) || roomNames.length === 0) return;
+
+  const patches = {};
+  roomNames.forEach((name) => {
+    patches[name] = { status: 'error', error: errorMessage };
+  });
+  bulkPatchRooms(patches);
+}
+
+// ─────────────────────────────────────────────────────
+// Room selectors (read-only lookups for the modal data-bridge)
+// ─────────────────────────────────────────────────────
+//
+// CheckInModal_2 and CheckOutModal_2 are deliberately kept ignorant of
+// state.js — they ask main.js "what else can I add?" via callbacks and
+// render whatever comes back. These selectors are what main.js wires
+// those callbacks to.
+
+/**
+ * @param {string} roomName
+ * @returns {Object|null}
+ */
+export function getRoomByName(roomName) {
+  return _state.rooms.find((r) => r.room_name === roomName) ?? null;
+}
+
+/**
+ * Rooms eligible to be added to an in-progress group check-in.
+ * Backs CheckInModal_2's `getAvailableRooms(excludedRoomNames)` callback.
+ *
+ * @param {string[]} [excludeNames]
+ * @returns {Object[]}
+ */
+export function getAvailableRooms(excludeNames = []) {
+  return _state.rooms.filter(
+    (r) => r.status === 'available' && !excludeNames.includes(r.room_name)
+  );
+}
+
+/**
+ * Returns rooms that share the same Client_Booking_Ref AND guest_name.
+ * This effectively groups rooms for bulk checkout even if they have 
+ * different internal booking_ids.
+ */
+export function getRelatedRooms(anchor, excludeNames = []) {
+  if (!anchor || !anchor.Client_Booking_Ref) return [];
+
+  // We no longer need to find the 'seedRoom' by booking_id
+  // We use the anchor object directly as the source of truth
+  return _state.rooms.filter(
+    (room) =>
+      room.status === 'occupied' &&
+      room.Client_Booking_Ref === anchor.Client_Booking_Ref &&
+      room.guest_name === anchor.guest_name &&
+      !excludeNames.includes(room.room_name)
+  );
 }
 
 // ─────────────────────────────────────────────────────
