@@ -1,19 +1,26 @@
 /**
- * js/components/CheckInModal.js
+ * js/components/CheckInModal_2.js
  * ─────────────────────────────────────────────────────
- * Slide-out panel component that handles new guest
- * check-ins for one OR MORE available rooms (group booking):
- * - Guest name + nights are shared across the whole group
- * - Each room in the group gets its own room-type toggle
- *   and rate selector, looped from the `rooms` array
- * - Payment (method + reference) is captured once for the
- *   whole group via the shared payments.js helpers
- * - Save button disabled until the shared fields are valid;
- *   payment is validated on submit, same pattern as CheckOutModal.js
+ * Dynamic-group check-in modal (v2 of CheckInModal.js).
  *
- * Checkout, POS/shop items, and receipt printing live in
- * CheckOutModal.js — this component only ever handles
- * available rooms.
+ * Differences from the original CheckInModal.js:
+ * - The set of rooms being checked in is no longer fixed at open time.
+ *   It lives in a local `activeGroup` array that can grow via an
+ *   "Add Room" dropdown, or shrink via a per-room remove button,
+ *   without closing the modal, losing the Guest Name / Nights values,
+ *   or dropping focus from whichever field the user is typing in.
+ * - Room blocks are rendered into a dedicated `#ci-rooms-list`
+ *   container that gets swapped out on every group change; the shared
+ *   fields (Guest Name, Nights, Payment) live outside that container
+ *   and are never re-created, so they never lose focus or value.
+ * - All per-room interactions (room-type toggle, remove button) are
+ *   wired via a single pair of delegated listeners on #ci-rooms-list
+ *   instead of one listener per room/button, so rooms added later are
+ *   interactive immediately with no re-wiring step.
+ *
+ * The caller (main.js) supplies a `getAvailableRooms(excludedNames)`
+ * callback so this component never has to import state.js directly —
+ * it just asks "what else can I add?" and renders whatever comes back.
  *
  * Exports:
  * - openModal(rooms, callbacks)
@@ -36,6 +43,23 @@ const RATE_MAX = 6500;
 const RATE_STEP = 100;
 
 // ─────────────────────────────────────────────────────
+// Module-level state
+// ─────────────────────────────────────────────────────
+//
+// Only one instance of this modal is ever open at a time (it shares
+// the #checkin-modal / #modal-overlay DOM nodes with CheckOutModal.js,
+// same as the original), so module-level state is safe here and keeps
+// the public API simple — same pattern as _roomTypeSelections used to
+// be in CheckInModal.js, just promoted to also own the room list.
+
+let _activeGroup = [];              // Object[] — rooms currently in this check-in
+let _roomTypeSelections = {};       // room_name -> "Bed and Breakfast" | "Bed Only"
+let _rateSelections = {};           // room_name -> currently chosen charged_rate (number)
+let _onCheckInCallback = null;
+let _getAvailableRoomsCallback = null;
+let _ownerMode = false;
+
+// ─────────────────────────────────────────────────────
 // Internal helpers
 // ─────────────────────────────────────────────────────
 
@@ -46,10 +70,11 @@ function _ksh(n) {
 }
 
 /** @returns {string} — option HTML for rate dropdown */
-function _buildRateOptions(baseRate) {
+function _buildRateOptions(baseRate, selectedRate) {
+  const target = selectedRate ?? baseRate;
   let html = "";
   for (let r = RATE_MIN; r <= RATE_MAX; r += RATE_STEP) {
-    const selected = r === baseRate ? "selected" : "";
+    const selected = r === target ? "selected" : "";
     html += `<option value="${r}" ${selected}>${_ksh(r)}</option>`;
   }
   return html;
@@ -60,36 +85,60 @@ function _safeId(roomName) {
   return String(roomName).replace(/[^a-zA-Z0-9_-]/g, "_");
 }
 
+/** Names of rooms currently in the group, for exclusion + dedupe checks. */
+function _activeGroupNames() {
+  return _activeGroup.map((r) => r.room_name);
+}
+
 // ─────────────────────────────────────────────────────
-// HTML Builder
+// HTML builders
 // ─────────────────────────────────────────────────────
 
 /**
- * Builds the per-room type-toggle + rate-selector block.
+ * Builds a single room's type-toggle + rate-selector block.
+ * Reads current selections from module state so re-renders don't
+ * reset a room back to its default type/rate.
  * @param {Object} room
  * @returns {string}
  */
 function _buildRoomBlock(room) {
   const id = _safeId(room.room_name);
+  const roomType = _roomTypeSelections[room.room_name] ?? room.room_type;
+  const chargedRate = _rateSelections[room.room_name] ?? room.base_rate;
+  const canRemove = _activeGroup.length > 1;
 
   return `
     <div class="rounded-lg bg-gray-800/60 border border-gray-700 px-4 py-3 space-y-3" data-room="${room.room_name}">
       <div class="flex items-center justify-between">
         <p class="text-sm font-semibold text-white">${room.room_name}</p>
-        <p class="text-xs text-gray-500">Base: ${_ksh(room.base_rate)}</p>
+        <div class="flex items-center gap-2">
+          <p class="text-xs text-gray-500">Base: ${_ksh(room.base_rate)}</p>
+          ${
+            canRemove
+              ? `<button type="button" data-action="remove-room" data-room="${room.room_name}"
+                   title="Remove room from this check-in"
+                   class="w-6 h-6 flex items-center justify-center rounded-md bg-gray-800 hover:bg-red-900/60
+                          text-gray-500 hover:text-red-400 border border-gray-700 hover:border-red-700 transition-colors">
+                   <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                   </svg>
+                 </button>`
+              : ""
+          }
+        </div>
       </div>
 
       <div>
         <label class="block text-xs font-semibold text-gray-400 mb-1.5">Room Type</label>
         <div class="grid grid-cols-2 gap-2">
-          <button type="button" data-room="${room.room_name}" data-type="Bed and Breakfast"
+          <button type="button" data-action="room-type" data-room="${room.room_name}" data-type="Bed and Breakfast"
             class="room-type-btn py-2.5 px-3 rounded-lg border text-sm font-medium transition-colors
-                   ${room.room_type === "Bed and Breakfast" ? "bg-brand-700 border-brand-500 text-white" : "bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-500"}">
+                   ${roomType === "Bed and Breakfast" ? "bg-brand-700 border-brand-500 text-white" : "bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-500"}">
             Bed and Breakfast
           </button>
-          <button type="button" data-room="${room.room_name}" data-type="Bed Only"
+          <button type="button" data-action="room-type" data-room="${room.room_name}" data-type="Bed Only"
             class="room-type-btn py-2.5 px-3 rounded-lg border text-sm font-medium transition-colors
-                   ${room.room_type === "Bed Only" ? "bg-brand-700 border-brand-500 text-white" : "bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-500"}">
+                   ${roomType === "Bed Only" ? "bg-brand-700 border-brand-500 text-white" : "bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-500"}">
             Bed Only
           </button>
         </div>
@@ -103,11 +152,13 @@ function _buildRoomBlock(room) {
         <select id="ci-rate-${id}" data-room="${room.room_name}"
           class="ci-rate-select w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2.5 text-sm text-white
                  focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500 transition-colors">
-          ${_buildRateOptions(room.base_rate)}
+          ${_buildRateOptions(room.base_rate, chargedRate)}
         </select>
-        <div class="ci-variance-container mt-2 hidden" data-room="${room.room_name}">
+        <div class="ci-variance-container mt-2 ${chargedRate === room.base_rate ? "hidden" : ""}" data-room="${room.room_name}">
           <p class="text-[10px] uppercase font-bold tracking-wider text-gray-500">
-            Variance: <span class="ci-variance-value text-white">0</span>
+            Variance: <span class="ci-variance-value ${chargedRate > room.base_rate ? "text-emerald-400" : "text-red-400"}">
+              ${chargedRate - room.base_rate > 0 ? "+" : ""}${chargedRate - room.base_rate} KSH
+            </span>
           </p>
         </div>
       </div>
@@ -115,20 +166,70 @@ function _buildRoomBlock(room) {
   `;
 }
 
+/** Builds the "Add Room" dropdown row from whatever the host app says is available. */
+function _buildAddRoomRow() {
+  const excluded = _activeGroupNames();
+  const available = (_getAvailableRoomsCallback?.(excluded) ?? []).filter(
+    (r) => !excluded.includes(r.room_name)
+  );
+
+  if (available.length === 0) {
+    return `
+      <div class="rounded-lg border border-dashed border-gray-800 px-4 py-3 text-xs text-gray-600 italic">
+        No other available rooms to add.
+      </div>
+    `;
+  }
+
+  const optionsHtml = available
+    .map((r) => `<option value="${r.room_name}">${r.room_name} — ${_ksh(r.base_rate)}</option>`)
+    .join("");
+
+  return `
+    <div class="flex items-center gap-2">
+      <select id="ci-add-room-select"
+        class="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2.5 text-sm text-white
+               focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500 transition-colors">
+        ${optionsHtml}
+      </select>
+      <button type="button" id="ci-btn-add-room"
+        class="px-4 py-2.5 rounded-lg text-sm font-semibold text-white bg-gray-700 hover:bg-brand-700
+               border border-gray-600 hover:border-brand-500 transition-colors whitespace-nowrap">
+        + Add Room
+      </button>
+    </div>
+  `;
+}
+
+/** Re-renderable inner markup: room blocks + add-room row. Guest/Nights/Payment live outside this. */
+function _buildRoomsSection() {
+  const isGroup = _activeGroup.length > 1;
+  return `
+    <p class="text-xs font-semibold text-gray-500 uppercase tracking-widest mb-2">
+      ${isGroup ? "Rooms" : "Room Details"}
+    </p>
+    <div id="ci-rooms-list" class="space-y-3">
+      ${_activeGroup.map(_buildRoomBlock).join("")}
+    </div>
+    <div class="mt-3">
+      ${_buildAddRoomRow()}
+    </div>
+  `;
+}
+
 /**
- * Builds the check-in form HTML for one or more AVAILABLE rooms.
- * @param {Object[]} rooms
+ * Builds the full check-in form shell. Only called once, on open —
+ * subsequent room-group changes go through `_refreshModalBody()`.
  * @returns {string}
  */
-function _buildCheckInForm(rooms) {
-  const isGroup = rooms.length > 1;
-  const roomBlocksHtml = rooms.map(_buildRoomBlock).join("");
+function _buildCheckInForm() {
+  const isGroup = _activeGroup.length > 1;
 
   return `
     <div class="flex items-center justify-between px-5 py-4 border-b border-gray-800">
       <div>
         <p class="text-xs text-gray-500 uppercase tracking-widest font-medium">${isGroup ? "Group Check-In" : "Check-In"}</p>
-        <h2 class="text-xl font-bold text-white mt-0.5">${isGroup ? `${rooms.length} Rooms` : rooms[0].room_name}</h2>
+        <h2 id="ci-header-title" class="text-xl font-bold text-white mt-0.5">${isGroup ? `${_activeGroup.length} Rooms` : _activeGroup[0].room_name}</h2>
       </div>
       <button id="modal-close-btn" type="button"
         class="w-8 h-8 rounded-lg bg-gray-800 hover:bg-gray-700 flex items-center justify-center text-gray-400 hover:text-white transition-colors">
@@ -142,7 +243,7 @@ function _buildCheckInForm(rooms) {
 
       <div>
         <label class="block text-xs font-semibold text-gray-400 mb-1.5" for="ci-guest-name">
-          Guest Name${isGroup ? " (whole group)" : ""}
+          Guest Name <span id="ci-guest-name-hint">${isGroup ? "(whole group)" : ""}</span>
         </label>
         <input id="ci-guest-name" type="text" placeholder="Full name of guest"
           class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2.5 text-sm text-white
@@ -151,20 +252,15 @@ function _buildCheckInForm(rooms) {
 
       <div>
         <label class="block text-xs font-semibold text-gray-400 mb-1.5" for="ci-nights">
-          Number of Nights${isGroup ? " (applies to all rooms)" : ""}
+          Number of Nights <span id="ci-nights-hint">${isGroup ? "(applies to all rooms)" : ""}</span>
         </label>
         <input id="ci-nights" type="number" min="1" max="30" value="1"
           class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2.5 text-sm text-white
                  focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500 transition-colors" />
       </div>
 
-      <div>
-        <p class="text-xs font-semibold text-gray-500 uppercase tracking-widest mb-2">
-          ${isGroup ? "Rooms" : "Room Details"}
-        </p>
-        <div class="space-y-3">
-          ${roomBlocksHtml}
-        </div>
+      <div id="ci-rooms-section">
+        ${_buildRoomsSection()}
       </div>
 
       <div>
@@ -182,7 +278,7 @@ function _buildCheckInForm(rooms) {
         class="w-full py-2.5 rounded-xl font-semibold text-sm text-white bg-gradient-to-r from-brand-600 to-brand-500
                hover:from-brand-500 hover:to-brand-400
                transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
-        ${isGroup ? `Check In ${rooms.length} Rooms` : "Save Check-In"}
+        <span id="ci-save-btn-label">${isGroup ? `Check In ${_activeGroup.length} Rooms` : "Save Check-In"}</span>
       </button>
       <button id="modal-cancel-btn" type="button"
         class="w-full py-2 rounded-xl font-medium text-sm text-gray-500 hover:text-gray-300 transition-colors">
@@ -193,92 +289,185 @@ function _buildCheckInForm(rooms) {
 }
 
 // ─────────────────────────────────────────────────────
-// Check-in form logic
+// Dynamic body refresh
 // ─────────────────────────────────────────────────────
 
 /**
- * Wires up all interactive behaviour for the check-in form.
- * @param {Object[]} rooms
- * @param {Function} onSave    - Called with the validated group form data.
- * @param {boolean}  ownerMode - True if the active role is owner (bypasses leniency requirements).
+ * Re-renders everything that depends on the current room group
+ * (header title, room blocks, add-room dropdown, save button label)
+ * WITHOUT touching #ci-guest-name, #ci-nights, or #ci-payment-fields.
+ * Those nodes are never removed from the DOM, so whatever the user was
+ * typing (and their cursor position/focus) survives a room being
+ * added or removed.
  */
-function _wireCheckInForm(rooms, onSave, ownerMode = false) {
-  // room_name -> currently selected room type
-  const _roomTypeSelections = {};
-  rooms.forEach((room) => {
-    _roomTypeSelections[room.room_name] = room.room_type;
-  });
+function _refreshModalBody() {
+  const isGroup = _activeGroup.length > 1;
 
+  const headerTitle = document.getElementById("ci-header-title");
+  if (headerTitle) {
+    headerTitle.textContent = isGroup ? `${_activeGroup.length} Rooms` : _activeGroup[0].room_name;
+  }
+
+  const guestHint = document.getElementById("ci-guest-name-hint");
+  if (guestHint) guestHint.textContent = isGroup ? "(whole group)" : "";
+
+  const nightsHint = document.getElementById("ci-nights-hint");
+  if (nightsHint) nightsHint.textContent = isGroup ? "(applies to all rooms)" : "";
+
+  const roomsSection = document.getElementById("ci-rooms-section");
+  if (roomsSection) roomsSection.innerHTML = _buildRoomsSection();
+
+  const saveLabel = document.getElementById("ci-save-btn-label");
+  if (saveLabel) saveLabel.textContent = isGroup ? `Check In ${_activeGroup.length} Rooms` : "Save Check-In";
+
+  _wireAddRoomRow();
+  _validateSharedFields();
+}
+
+// ─────────────────────────────────────────────────────
+// Wiring
+// ─────────────────────────────────────────────────────
+
+/** Evaluates the shared-field validity and en/disables the Save button. */
+function _validateSharedFields() {
+  const guestInput = document.getElementById("ci-guest-name");
+  const nightsInput = document.getElementById("ci-nights");
+  const saveBtn = document.getElementById("btn-save-checkin");
+  const validationMsg = document.getElementById("ci-validation-msg");
+  if (!guestInput || !nightsInput || !saveBtn) return;
+
+  const hasGuest = guestInput.value.trim().length > 0;
+  const hasNights = Number(nightsInput.value) >= 1;
+  const valid = hasGuest && hasNights;
+
+  saveBtn.disabled = !valid;
+
+  if (!valid && (guestInput.value || nightsInput.value)) {
+    validationMsg.textContent = !hasGuest ? "Guest name is required." : "Enter a valid number of nights.";
+    validationMsg.classList.remove("hidden");
+  } else {
+    validationMsg.classList.add("hidden");
+  }
+}
+
+/** Wires the "+ Add Room" button. Called after every refresh since the row is rebuilt each time. */
+function _wireAddRoomRow() {
+  const addBtn = document.getElementById("ci-btn-add-room");
+  const addSelect = document.getElementById("ci-add-room-select");
+  if (!addBtn || !addSelect) return;
+
+  addBtn.addEventListener("click", () => {
+    const roomName = addSelect.value;
+    if (!roomName || _activeGroupNames().includes(roomName)) return;
+
+    const candidates = _getAvailableRoomsCallback?.(_activeGroupNames()) ?? [];
+    const room = candidates.find((r) => r.room_name === roomName);
+    if (!room) return;
+
+    _activeGroup.push(room);
+    _roomTypeSelections[room.room_name] = room.room_type;
+    _rateSelections[room.room_name] = room.base_rate;
+
+    _refreshModalBody();
+  });
+}
+
+/**
+ * Delegated click handler for the rooms list — handles room-type
+ * toggles and room-removal for every room currently rendered,
+ * including ones added after the modal first opened.
+ */
+function _onRoomsListClick(e) {
+  const typeBtn = e.target.closest('[data-action="room-type"]');
+  if (typeBtn) {
+    const roomName = typeBtn.dataset.room;
+    const type = typeBtn.dataset.type;
+    _roomTypeSelections[roomName] = type;
+
+    document.querySelectorAll(`.room-type-btn[data-room="${roomName}"]`).forEach((b) => {
+      const active = b.dataset.type === type;
+      b.classList.toggle("bg-brand-700", active);
+      b.classList.toggle("border-brand-500", active);
+      b.classList.toggle("text-white", active);
+      b.classList.toggle("bg-gray-800", !active);
+      b.classList.toggle("border-gray-700", !active);
+      b.classList.toggle("text-gray-400", !active);
+    });
+    return;
+  }
+
+  const removeBtn = e.target.closest('[data-action="remove-room"]');
+  if (removeBtn) {
+    const roomName = removeBtn.dataset.room;
+    if (_activeGroup.length <= 1) return; // Never remove the last room — close the modal instead.
+
+    _activeGroup = _activeGroup.filter((r) => r.room_name !== roomName);
+    delete _roomTypeSelections[roomName];
+    delete _rateSelections[roomName];
+
+    _refreshModalBody();
+  }
+}
+
+/** Delegated change handler for the rooms list — handles rate-select variance display. */
+function _onRoomsListChange(e) {
+  const rateSelect = e.target.closest(".ci-rate-select");
+  if (!rateSelect) return;
+
+  const roomName = rateSelect.dataset.room;
+  const room = _activeGroup.find((r) => r.room_name === roomName);
+  if (!room) return;
+
+  const selectedRate = Number(rateSelect.value);
+  _rateSelections[roomName] = selectedRate;
+
+  const varianceContainer = document.querySelector(`.ci-variance-container[data-room="${roomName}"]`);
+  const varianceValue = varianceContainer?.querySelector(".ci-variance-value");
+  const variance = selectedRate - Number(room.base_rate);
+
+  if (variance !== 0) {
+    varianceContainer.classList.remove("hidden");
+    varianceValue.textContent = `${variance > 0 ? "+" : ""}${variance} KSH`;
+    varianceValue.className = `ci-variance-value ${variance > 0 ? "text-emerald-400" : "text-red-400"}`;
+  } else {
+    varianceContainer?.classList.add("hidden");
+  }
+}
+
+/**
+ * Wires up all interactive behaviour for the check-in form. Called
+ * once per modal open — everything room-related after this point goes
+ * through the two delegated listeners set up here, so it keeps
+ * working after `_refreshModalBody()` swaps the rooms list HTML.
+ */
+function _wireCheckInForm() {
   const saveBtn = document.getElementById("btn-save-checkin");
   const guestInput = document.getElementById("ci-guest-name");
   const nightsInput = document.getElementById("ci-nights");
   const validationMsg = document.getElementById("ci-validation-msg");
   const paymentFieldsContainer = document.getElementById("ci-payment-fields");
+  const roomsList = document.getElementById("ci-rooms-list")?.parentElement; // #ci-rooms-section
 
-  /** Evaluates the shared-field validity and en/disables the Save button */
-  function _validate() {
-    const hasGuest = guestInput.value.trim().length > 0;
-    const hasNights = Number(nightsInput.value) >= 1;
-    const valid = hasGuest && hasNights;
+  // 1. Shared input listeners (guest name / nights never get re-created)
+  guestInput.addEventListener("input", _validateSharedFields);
+  nightsInput.addEventListener("input", _validateSharedFields);
 
-    saveBtn.disabled = !valid;
+  // 2. Event delegation for room-type + remove buttons, and rate selects.
+  //    Attached once on the stable #ci-rooms-section wrapper, so rooms
+  //    added later via _refreshModalBody() are interactive immediately —
+  //    no re-wiring needed.
+  roomsList.addEventListener("click", _onRoomsListClick);
+  roomsList.addEventListener("change", _onRoomsListChange);
 
-    if (!valid && (guestInput.value || nightsInput.value)) {
-      validationMsg.textContent = !hasGuest ? "Guest name is required." : "Enter a valid number of nights.";
-      validationMsg.classList.remove("hidden");
-    } else {
-      validationMsg.classList.add("hidden");
-    }
-  }
-
-  // 1. Rate variance listeners (one per room)
-  rooms.forEach((room) => {
-    const rateSelect = document.getElementById(`ci-rate-${_safeId(room.room_name)}`);
-    const varianceContainer = document.querySelector(`.ci-variance-container[data-room="${room.room_name}"]`);
-    const varianceValue = varianceContainer?.querySelector(".ci-variance-value");
-
-    rateSelect.addEventListener("change", (e) => {
-      const selectedRate = Number(e.target.value);
-      const variance = selectedRate - Number(room.base_rate);
-
-      if (variance !== 0) {
-        varianceContainer.classList.remove("hidden");
-        varianceValue.textContent = `${variance > 0 ? "+" : ""}${variance} KSH`;
-        varianceValue.className = `ci-variance-value ${variance > 0 ? "text-emerald-400" : "text-red-400"}`;
-      } else {
-        varianceContainer.classList.add("hidden");
-      }
-    });
-  });
-
-  // 2. Standard shared input listeners
-  guestInput.addEventListener("input", _validate);
-  nightsInput.addEventListener("input", _validate);
-
-  // 3. Room type toggle logic, scoped per room
-  rooms.forEach((room) => {
-    document.querySelectorAll(`.room-type-btn[data-room="${room.room_name}"]`).forEach((btn) => {
-      btn.addEventListener("click", () => {
-        _roomTypeSelections[room.room_name] = btn.dataset.type;
-        document.querySelectorAll(`.room-type-btn[data-room="${room.room_name}"]`).forEach((b) => {
-          const active = b.dataset.type === _roomTypeSelections[room.room_name];
-          b.classList.toggle("bg-brand-700", active);
-          b.classList.toggle("border-brand-500", active);
-          b.classList.toggle("text-white", active);
-          b.classList.toggle("bg-gray-800", !active);
-          b.classList.toggle("border-gray-700", !active);
-          b.classList.toggle("text-gray-400", !active);
-        });
-      });
-    });
-  });
+  // 3. Add-room dropdown (rebuilt each refresh, so wire it fresh here too)
+  _wireAddRoomRow();
 
   // 4. Group payment fields (method + conditional reference)
   renderPaymentFields("ci-payment-fields", "cash");
   paymentFieldsContainer.addEventListener("input", () => validationMsg.classList.add("hidden"));
   paymentFieldsContainer.addEventListener("change", () => validationMsg.classList.add("hidden"));
 
-  // 5. Final Save Event
+  // 5. Final Save
   saveBtn.addEventListener("click", () => {
     const guestName = guestInput.value.trim();
     const nights = Number(nightsInput.value);
@@ -296,10 +485,13 @@ function _wireCheckInForm(rooms, onSave, ownerMode = false) {
     }
     validationMsg.classList.add("hidden");
 
-    const roomsData = rooms.map((room) => {
+    // NOTE: rate_variance / grand_total are included here for any caller
+    // that still wants them for local UI math (e.g. a receipt preview),
+    // but api.js's bulkCheckIn() strips both before writing to Airtable,
+    // since those are formula fields computed server-side.
+    const roomsData = _activeGroup.map((room) => {
       const roomType = _roomTypeSelections[room.room_name] ?? room.room_type;
-      const rateSelect = document.getElementById(`ci-rate-${_safeId(room.room_name)}`);
-      const chargedRate = Number(rateSelect.value);
+      const chargedRate = Number(_rateSelections[room.room_name] ?? room.base_rate);
       const baseRate = Number(room.base_rate);
 
       return {
@@ -314,7 +506,7 @@ function _wireCheckInForm(rooms, onSave, ownerMode = false) {
       };
     });
 
-    onSave({
+    _onCheckInCallback?.({
       rooms: roomsData,
       payment_method: paymentMethod,
       payment_reference: reference || null,
@@ -322,7 +514,7 @@ function _wireCheckInForm(rooms, onSave, ownerMode = false) {
     });
   });
 
-  // Set initial state
+  // Initial state
   saveBtn.disabled = true;
 }
 
@@ -331,27 +523,42 @@ function _wireCheckInForm(rooms, onSave, ownerMode = false) {
 // ─────────────────────────────────────────────────────
 
 /**
- * Opens the slide-out modal for one or more AVAILABLE rooms.
- * Pass a single-item array for a normal solo check-in, or a
- * multi-item array for a group booking.
+ * Opens the slide-out modal for one or more AVAILABLE rooms, and lets
+ * the user extend the group afterwards via an "Add Room" dropdown.
  *
  * @param {Object[]} rooms
  * @param {{
- *   onCheckIn: Function,   // ({ rooms, payment_method, payment_reference, created_by }) => void
- *   ownerMode: boolean,    // Pass true to bypass explanation logs for lower rates
+ *   onCheckIn: Function,          // ({ rooms, payment_method, payment_reference, created_by }) => void
+ *   ownerMode?: boolean,          // Pass true to bypass explanation logs for lower rates
+ *   getAvailableRooms: (excludedRoomNames: string[]) => Object[]
+ *     // Returns the current list of rooms that could still be added —
+ *     // main.js owns state.js, so it's the one deciding what "available"
+ *     // means (status === 'available' and not already in the group).
  * }} callbacks
  */
-export function openModal(rooms, { onCheckIn, ownerMode }) {
+export function openModal(rooms, { onCheckIn, ownerMode = false, getAvailableRooms }) {
   const modal = document.getElementById("checkin-modal");
   const overlay = document.getElementById("modal-overlay");
   if (!modal || !overlay) return;
   if (!Array.isArray(rooms) || rooms.length === 0) return;
 
+  // Reset module state for this open
+  _activeGroup = [...rooms];
+  _roomTypeSelections = {};
+  _rateSelections = {};
+  rooms.forEach((room) => {
+    _roomTypeSelections[room.room_name] = room.room_type;
+    _rateSelections[room.room_name] = room.base_rate;
+  });
+  _onCheckInCallback = onCheckIn;
+  _getAvailableRoomsCallback = typeof getAvailableRooms === "function" ? getAvailableRooms : () => [];
+  _ownerMode = ownerMode;
+
   // Inject HTML
-  modal.innerHTML = _buildCheckInForm(rooms);
+  modal.innerHTML = _buildCheckInForm();
 
   // Wire interactivity
-  _wireCheckInForm(rooms, onCheckIn, ownerMode);
+  _wireCheckInForm();
 
   // Close buttons
   document.getElementById("modal-close-btn")?.addEventListener("click", closeModal);
@@ -374,7 +581,8 @@ export function openModal(rooms, { onCheckIn, ownerMode }) {
 }
 
 /**
- * Closes the slide-out modal with animation.
+ * Closes the slide-out modal with animation and clears module state
+ * so the next open starts clean.
  */
 export function closeModal() {
   const modal = document.getElementById("checkin-modal");
@@ -388,4 +596,10 @@ export function closeModal() {
     overlay.classList.add("hidden");
     modal.innerHTML = "";
   }, 300);
+
+  _activeGroup = [];
+  _roomTypeSelections = {};
+  _rateSelections = {};
+  _onCheckInCallback = null;
+  _getAvailableRoomsCallback = null;
 }

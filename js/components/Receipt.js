@@ -50,6 +50,18 @@ function _receiptNo() {
   return `VGH-${date}-${rand}`;
 }
 
+/** * Calculates departure date based on check-in date and nights 
+ * @param {string} iso - ISO date string
+ * @param {number} nights 
+ */
+function _calcDeparture(iso, nights) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  d.setDate(d.getDate() + (parseInt(nights) || 1));
+  return d.toLocaleDateString('en-KE', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+
 // ─────────────────────────────────────────────────────
 // Receipt HTML builder
 // ─────────────────────────────────────────────────────
@@ -63,6 +75,7 @@ function _receiptNo() {
 function _buildReceiptHTML(room) {
   const chargedRate = Number(room.charged_rate ?? room.base_rate);
   const nights      = Number(room.nights ?? 1);
+  const departure = _calcDeparture(room.check_in, nights);
   const roomTotal   = chargedRate * nights;
   const shopTotal   = Number(room.shop_total ?? 0);
   const grandTotal  = roomTotal + shopTotal;

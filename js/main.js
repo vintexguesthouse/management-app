@@ -51,7 +51,7 @@ import { openModal as openCheckInModal, closeModal as closeCheckInModal } from "
 import {
   openModal as openCheckOutModal,
   closeModal as closeCheckOutModal,
-  refreshOccupiedTotals
+  refreshRoomTotals
 } from "./components/CheckOutModal.js";
 import { printReceipt } from "./components/Receipt.js";
 
@@ -919,7 +919,7 @@ async function _handleAddShop({ item_name, item_price, quantity }) {
     });
 
     const { activeRoom: updatedActive } = getState();
-    refreshOccupiedTotals(updatedActive);
+    refreshRoomTotals(updatedActive);
 
     showToast("success", "Item added", `${quantity}× ${item_name} — ${_ksh(lineTotal)}`);
   } else {
