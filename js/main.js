@@ -743,12 +743,16 @@ function _onCardClick(room) {
   if (room.status === "available") {
     openCheckInModal([room], {
       onCheckIn: _handleCheckIn,
+      // Inject the selector so the modal can find other available rooms
+      getAvailableRooms: (excluded) => getAvailableRooms(excluded),
       ownerMode: getActiveRole() === "owner"
     });
   } else if (room.status === "occupied") {
     openCheckOutModal(room, {
       onAddShop: _handleAddShop,
-      onCheckOut: _handleCheckOut
+      onCheckOut: _handleCheckOut,
+      // Inject the selector using the room as the 'anchor'
+      getRelatedRooms: (anchor, excluded) => getRelatedRooms(anchor, excluded)
     });
   }
 }

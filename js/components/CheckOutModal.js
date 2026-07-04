@@ -62,11 +62,12 @@ const SHOP_ITEMS = [
 // #modal-overlay nodes), so module-level state is safe and keeps the
 // exported functions simple.
 
-let _activeGroup = [];              // Object[] — rooms currently in this checkout
-let _anchor = null;                 // { booking_id, guest_name } — used to find related rooms
-let _onAddShopCallback = null;      // (room, { item_name, item_price, quantity }) => void
-let _onCheckOutCallback = null;     // ({ rooms, payment_method, payment_reference }) => void
+let _activeGroup = []; // Object[] — rooms currently in this checkout
+let _anchor = null; // { booking_id, guest_name } — used to find related rooms
+let _onAddShopCallback = null; // (room, { item_name, item_price, quantity }) => void
+let _onCheckOutCallback = null; // ({ rooms, payment_method, payment_reference }) => void
 let _getRelatedRoomsCallback = null; // (anchor, excludedRoomNames) => Object[]
+let _getAvailableRoomsCallback = null;
 
 // ─────────────────────────────────────────────────────
 // Internal helpers
@@ -213,23 +214,31 @@ function _buildRoomBlock(room) {
   `;
 }
 
-/** Builds the "Add Room" dropdown row from whatever the host app says shares this booking. */
+/** Builds the "Add Room" dropdown. Now hybrid: shows related AND available rooms. */
 function _buildAddRoomRow() {
   const excluded = _activeGroupNames();
-  const related = (_getRelatedRoomsCallback?.(_anchor, excluded) ?? []).filter(
-    (r) => !excluded.includes(r.room_name)
-  );
 
-  if (related.length === 0) {
+  // 1. Get occupied siblings (from the callback injected by main.js)
+  const related = _getRelatedRoomsCallback?.(_anchor, excluded) ?? [];
+
+  // 2. Get available rooms (newly injected callback for the hybrid model)
+  const available = _getAvailableRoomsCallback?.(excluded) ?? [];
+
+  const allOptions = [...related, ...available];
+
+  if (allOptions.length === 0) {
     return `
       <div class="rounded-lg border border-dashed border-gray-800 px-4 py-3 text-xs text-gray-600 italic">
-        No other occupied rooms found for this guest/booking.
+        No other rooms available to add.
       </div>
     `;
   }
 
-  const optionsHtml = related
-    .map((r) => `<option value="${r.room_name}">${r.room_name}</option>`)
+  const optionsHtml = allOptions
+    .map((r) => {
+      const label = r.status === "occupied" ? `${r.room_name} (Sibling)` : `${r.room_name} (Available)`;
+      return `<option value="${r.room_name}">${label}</option>`;
+    })
     .join("");
 
   return `
@@ -395,9 +404,7 @@ function _onRoomsListClick(e) {
 
     const itemName = addShopBtn.dataset.itemName;
     const itemPrice = Number(addShopBtn.dataset.itemPrice);
-    const qtyInput = document.querySelector(
-      `.shop-qty[data-room="${roomName}"][data-item-name="${itemName}"]`
-    );
+    const qtyInput = document.querySelector(`.shop-qty[data-room="${roomName}"][data-item-name="${itemName}"]`);
     const qty = Math.max(1, Number(qtyInput?.value ?? 1));
 
     _onAddShopCallback?.(room, { item_name: itemName, item_price: itemPrice, quantity: qty });
@@ -505,6 +512,7 @@ export function openModal(room, { onAddShop, onCheckOut, getRelatedRooms }) {
   _onAddShopCallback = onAddShop;
   _onCheckOutCallback = onCheckOut;
   _getRelatedRoomsCallback = typeof getRelatedRooms === "function" ? getRelatedRooms : () => [];
+  _getAvailableRoomsCallback = callbacks.getAvailableRooms;
 
   // Inject HTML
   modal.innerHTML = _buildCheckOutPanel();

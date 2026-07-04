@@ -295,6 +295,7 @@ export function getRoomByName(roomName) {
  * @returns {Object[]}
  */
 export function getAvailableRooms(excludeNames = []) {
+  const { rooms } = getState();
   return _state.rooms.filter(
     (r) => r.status === 'available' && !excludeNames.includes(r.room_name)
   );
@@ -308,6 +309,8 @@ export function getAvailableRooms(excludeNames = []) {
 export function getRelatedRooms(anchor, excludeNames = []) {
   if (!anchor || !anchor.Client_Booking_Ref) return [];
 
+  const { rooms } = getState();
+  
   // We no longer need to find the 'seedRoom' by booking_id
   // We use the anchor object directly as the source of truth
   return _state.rooms.filter(
