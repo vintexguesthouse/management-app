@@ -46,6 +46,14 @@ export async function fetchRooms() {
   }
 }
 
+function _formatPaymentMethod(method) {
+  if (!method) return null;
+  const val = method.toLowerCase();
+  if (val === "cash") return "Cash";
+  if (val === "mpesa") return "M-Pesa";
+  return method; // Return original if unknown
+}
+
 // 2. CHECK IN (POST to Airtable)
 export async function checkIn(payload) {
   try {
@@ -222,10 +230,10 @@ export async function bulkCheckIn(recordsArray) {
 export async function checkOut(airtableId, payload) {
   try {
     // Merge status into the payload before sanitizing
-    const dataToSave = { 
-      ...payload, 
-      is_active: false, 
-      payment_status: "paid" 
+    const dataToSave = {
+      ...payload,
+      is_active: false,
+      payment_status: "paid"
     };
 
     const response = await fetch(`${AIRTABLE_URL}/bookings/${airtableId}`, {
@@ -233,7 +241,7 @@ export async function checkOut(airtableId, payload) {
       headers: getHeaders(),
       body: JSON.stringify({ fields: _sanitizeBookingFields(dataToSave, true) })
     });
-    
+
     if (!response.ok) return _handleError(`HTTP ${response.status}`, response);
     return { ok: true };
   } catch (err) {
