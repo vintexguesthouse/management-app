@@ -497,8 +497,10 @@ function _wireCheckOutPanel() {
  *     // already in the group).
  * }} callbacks
  */
-export function openModal(room, { onAddShop, onCheckOut, getRelatedRooms }) {
-  const modal = document.getElementById("checkin-modal");
+export function openModal(room, callbacks) {
+  const { onAddShop, onCheckOut, getRelatedRooms, getAvailableRooms } = callbacks;
+  
+  const modal = document.getElementById("checkout-modal");
   const overlay = document.getElementById("modal-overlay");
   if (!modal || !overlay) return;
   if (!room) return;

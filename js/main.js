@@ -28,7 +28,9 @@ import {
   setActiveView,
   setSyncStatus,
   clearSelection,
-  on
+  on,
+  getAvailableRooms,
+  getRelatedRooms
 } from "./services/state.js";
 
 // ADDED: Added clean Airtable CRUD operations here
@@ -747,12 +749,13 @@ function _onCardClick(room) {
       getAvailableRooms: (excluded) => getAvailableRooms(excluded),
       ownerMode: getActiveRole() === "owner"
     });
-  } else if (room.status === "occupied") {
+  }else if (room.status === "occupied") {
     openCheckOutModal(room, {
       onAddShop: _handleAddShop,
       onCheckOut: _handleCheckOut,
-      // Inject the selector using the room as the 'anchor'
-      getRelatedRooms: (anchor, excluded) => getRelatedRooms(anchor, excluded)
+      // Inject the selectors
+      getRelatedRooms: (anchor, excluded) => getRelatedRooms(anchor, excluded), 
+      getAvailableRooms: (excluded) => getAvailableRooms(excluded)
     });
   }
 }
