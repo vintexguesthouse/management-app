@@ -358,6 +358,10 @@ function _mergeData(rooms, bookings) {
         check_in: activeBooking.check_in || activeBooking.created_at || new Date().toISOString(),
         shop_total: Number(activeBooking.shop_charge || 0),
         shop_items: Array.isArray(local?.shop_items) ? local.shop_items : [],
+        // Top-level, not just nested in activeBooking — getRelatedRooms()
+        // in state.js filters on room.Client_Booking_Ref directly, so it
+        // has to live here or every sibling lookup silently returns [].
+        Client_Booking_Ref: activeBooking.Client_Booking_Ref ?? null,
         activeBooking
       };
     }
@@ -789,6 +793,10 @@ async function _handleCheckIn(groupFormData) {
       check_in: checkInTimestamp,
       shop_total: 0,
       shop_items: [],
+      // Top-level, so getRelatedRooms() can match siblings immediately —
+      // same room comes back with this field from Airtable via
+      // _mergeData() on the next poll, so it's consistent before/after sync.
+      Client_Booking_Ref: formData.Client_Booking_Ref,
       activeBooking: {
         room_name: formData.room_name,
         guest_name: formData.guest_name,
@@ -801,6 +809,7 @@ async function _handleCheckIn(groupFormData) {
         check_in: checkInTimestamp,
         shop_charge: 0,
         grand_total: formData.grand_total,
+        Client_Booking_Ref: formData.Client_Booking_Ref,
         is_active: true
       }
     });
@@ -832,7 +841,10 @@ async function _handleCheckIn(groupFormData) {
         payment_method,
         payment_reference,
         is_active: true,
-        created_by
+        created_by,
+        // Same ref CheckInModal generated for the whole group — this is
+        // the anchor state.js/CheckOutModal use to find sibling rooms.
+        Client_Booking_Ref: formData.Client_Booking_Ref
       };
 
       const result = await checkIn(airtablePayload);
@@ -865,6 +877,7 @@ async function _handleCheckIn(groupFormData) {
       payment_reference: null,
       check_in: null,
       booking_id: null,
+      Client_Booking_Ref: null,
       activeBooking: null
     });
   });
@@ -978,6 +991,11 @@ async function _handleCheckOut(payload) {
         shop_total: 0,
         shop_items: [],
         nights: null,
+        // Clear the group anchor too — otherwise this room sits
+        // "available" while still carrying its previous stay's ref,
+        // which is stale data even though it's harmless to matching
+        // (getRelatedRooms only looks at occupied rooms).
+        Client_Booking_Ref: null,
         activeBooking: null
       });
     }

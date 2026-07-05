@@ -13,12 +13,14 @@
  *   user clicked, and can grow via an "Add Room" dropdown that pulls
  *   in other occupied rooms sharing the same booking, without closing
  *   the modal or resetting anything already entered.
- * - Matching for "same booking" uses a dual anchor — booking_id AND
- *   guest_name — supplied by main.js via `getRelatedRooms(anchor, excludedNames)`.
+ * - Matching for "same booking" uses a dual anchor — Client_Booking_Ref
+ *   AND guest_name — supplied by main.js via `getRelatedRooms(anchor, excludedNames)`.
  *   Two anchors instead of one avoids both false positives (two
  *   unrelated guests who happen to share a name) and false negatives
  *   (a group booking where each room got its own booking_id but the
- *   same guest_name).
+ *   same guest_name). booking_id itself is per-room and can't be used
+ *   as the group anchor — Client_Booking_Ref is what's shared across
+ *   every room in the group.
  * - Per-room shop-item + subtotal blocks are rendered into a
  *   `#co-rooms-list` container that gets swapped out on group change.
  *   Payment fields live outside that container and are never
@@ -63,7 +65,7 @@ const SHOP_ITEMS = [
 // exported functions simple.
 
 let _activeGroup = []; // Object[] — rooms currently in this checkout
-let _anchor = null; // { booking_id, guest_name } — used to find related rooms
+let _anchor = null; // { Client_Booking_Ref, guest_name } — used to find related rooms
 let _onAddShopCallback = null; // (room, { item_name, item_price, quantity }) => void
 let _onCheckOutCallback = null; // ({ rooms, payment_method, payment_reference }) => void
 let _getRelatedRoomsCallback = null; // (anchor, excludedRoomNames) => Object[]
@@ -397,6 +399,7 @@ function _wireAddRoomRow() {
     if (!roomName || _activeGroupNames().includes(roomName)) return;
 
     const candidates = _getRelatedRoomsCallback?.(_anchor, _activeGroupNames()) ?? [];
+    console.log("Current Candidates:", candidates);
     const room = candidates.find((r) => r.room_name === roomName);
     if (!room) {
     console.log("Room not found in candidates list!");
@@ -503,17 +506,17 @@ function _wireCheckOutPanel() {
 /**
  * Opens the slide-out modal for an OCCUPIED room, and lets the user
  * extend the session afterwards via an "Add Room" dropdown that pulls
- * in other rooms sharing the same booking_id + guest_name anchor.
+ * in other rooms sharing the same Client_Booking_Ref + guest_name anchor.
  *
  * @param {Object} room
  * @param {{
  *   onAddShop:  Function,  // (room, { item_name, item_price, quantity }) => void
  *   onCheckOut: Function,  // ({ rooms: [{room_name, booking_id}], payment_method, payment_reference }) => void
- *   getRelatedRooms: (anchor: {booking_id, guest_name}, excludedRoomNames: string[]) => Object[]
+ *   getRelatedRooms: (anchor: {Client_Booking_Ref, guest_name}, excludedRoomNames: string[]) => Object[]
  *     // Returns other occupied rooms belonging to the same stay —
  *     // main.js owns state.js, so it decides the matching rule
- *     // (typically: same guest_name OR same booking_id, minus rooms
- *     // already in the group).
+ *     // (getRelatedRooms() requires same Client_Booking_Ref AND same
+ *     // guest_name, minus rooms already in the group).
  * }} callbacks
  */
 export function openModal(room, callbacks) {
@@ -527,7 +530,10 @@ export function openModal(room, callbacks) {
   // Reset module state for this open
   _activeGroup = [room];
   _anchor = {
-    booking_id: room.booking_id ?? null,
+    // getRelatedRooms() in state.js filters on Client_Booking_Ref + guest_name.
+    // booking_id is per-room, not shared across a group, so it can't anchor
+    // the lookup — Client_Booking_Ref is the field every sibling shares.
+    Client_Booking_Ref: room.Client_Booking_Ref ?? null,
     guest_name: room.activeBooking?.guest_name ?? null
   };
   _onAddShopCallback = onAddShop;

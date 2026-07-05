@@ -85,6 +85,37 @@ function _safeId(roomName) {
   return String(roomName).replace(/[^a-zA-Z0-9_-]/g, "_");
 }
 
+/**
+ * Generates the single Client_Booking_Ref for a check-in group:
+ * YYYYMMDD-GUESTNAME (e.g. "20260705-JOHN-DOE").
+ *
+ * This is the ONLY booking reference in the flow now — there is no
+ * manual reference/M-Pesa-code/bank-code input for the group itself.
+ * The same string gets stamped onto every room object in the group
+ * (see the Save handler below) so state.js / CheckOutModal.js can
+ * find siblings purely by matching this field, per the v4 state.js
+ * grouping design.
+ *
+ * @param {string} guestName
+ * @returns {string}
+ */
+function _generateClientBookingRef(guestName) {
+  const now = new Date();
+  const datePart = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(
+    now.getDate()
+  ).padStart(2, "0")}`;
+
+  const namePart = String(guestName || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9\s-]/g, "") // strip punctuation, keep letters/digits/spaces/hyphens
+    .split(/\s+/)
+    .filter(Boolean)
+    .join("-");
+
+  return `${datePart}-${namePart || "GUEST"}`;
+}
+
 /** Names of rooms currently in the group, for exclusion + dedupe checks. */
 function _activeGroupNames() {
   return _activeGroup.map((r) => r.room_name);
@@ -485,6 +516,14 @@ function _wireCheckInForm() {
     }
     validationMsg.classList.add("hidden");
 
+    // One Client_Booking_Ref per group, generated here and stamped onto
+    // every room below — including rooms that were added mid-session via
+    // "+ Add Room", since they're already in _activeGroup by the time
+    // Save is clicked. This is what lets a multi-room stay be found again
+    // later (e.g. CheckOutModal's sibling lookup) using a single shared
+    // field instead of a manually-typed reference.
+    const clientBookingRef = _generateClientBookingRef(guestName);
+
     // NOTE: rate_variance / grand_total are included here for any caller
     // that still wants them for local UI math (e.g. a receipt preview),
     // but api.js's bulkCheckIn() strips both before writing to Airtable,
@@ -502,7 +541,8 @@ function _wireCheckInForm() {
         base_rate: baseRate,
         charged_rate: chargedRate,
         rate_variance: chargedRate - baseRate,
-        grand_total: chargedRate * nights
+        grand_total: chargedRate * nights,
+        Client_Booking_Ref: clientBookingRef
       };
     });
 
@@ -510,7 +550,8 @@ function _wireCheckInForm() {
       rooms: roomsData,
       payment_method: paymentMethod,
       payment_reference: reference || null,
-      created_by: "system"
+      created_by: "system",
+      Client_Booking_Ref: clientBookingRef
     });
   });
 

@@ -108,9 +108,17 @@ function _chunk(array, size) {
   return chunks;
 }
 
-/** Strips Airtable formula fields out of a single record's field map. */
-function _sanitizeBookingFields(data) {
+/**
+ * Strips Airtable formula fields out of a single record's field map.
+ * @param {Object} data
+ * @param {boolean} isPatch - false for a fresh check-in (forces is_active
+ *   true), true for a checkout/patch (leaves is_active as given in `data`).
+ */
+function _sanitizeBookingFields(data, isPatch = false) {
   // 1. Define the exact columns that exist in your Airtable
+  //    mpesa_code / bank_code are gone — payment_reference is now the
+  //    single catch-all for any transaction reference, regardless of
+  //    payment method.
   const writableFields = [
     "Client_Booking_Ref",
     "room_name",
@@ -123,8 +131,6 @@ function _sanitizeBookingFields(data) {
     "payment_status",
     "payment_method",
     "payment_reference",
-    "mpesa_code",
-    "bank_code", // New: Add this to Airtable and here
     "shop_charge", // Only if you input this manually
     "is_active",
     "created_by"
