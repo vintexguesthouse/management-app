@@ -40,6 +40,29 @@ function _fmtDate(iso) {
 }
 
 /**
+ * Maps a raw payment_method value to its display label. Mirrors the
+ * labels used in payments.js / BookingHistory.js so the receipt says
+ * the same thing the rest of the app does.
+ * @param {string|null} method
+ * @returns {string}
+ */
+function _paymentMethodLabel(method) {
+  const labels = { cash: 'Cash', mpesa: 'M-Pesa', bank_transfer: 'Bank Transfer' };
+  return labels[method] ?? method ?? '—';
+}
+
+/**
+ * Maps a raw payment_status value to its display label.
+ * @param {string|null} status
+ * @returns {string}
+ */
+function _paymentStatusLabel(status) {
+  if (status === 'paid') return 'PAID IN FULL';
+  if (status === 'unpaid') return 'UNPAID';
+  return '—';
+}
+
+/**
  * Generates a short human-readable receipt number.
  * Format: VGH-YYYYMMDD-XXXX
  */
@@ -81,6 +104,14 @@ function _buildReceiptHTML(room) {
   const grandTotal  = roomTotal + shopTotal;
   const isDiscounted = chargedRate < Number(room.base_rate);
 
+  // Fall back to activeBooking for these two — _mergeData() in main.js
+  // sets payment_status at the top level on every poll, but doesn't
+  // currently re-derive top-level payment_method after the first poll,
+  // so activeBooking (which always reflects the raw Airtable record)
+  // is the more reliable source once some time has passed since check-in.
+  const paymentMethod = room.payment_method ?? room.activeBooking?.payment_method ?? null;
+  const paymentStatus = room.payment_status ?? room.activeBooking?.payment_status ?? null;
+
   // ── Shop items rows ──
   const shopItemsHTML = Array.isArray(room.shop_items) && room.shop_items.length > 0
     ? room.shop_items.map(si => {
@@ -121,7 +152,7 @@ function _buildReceiptHTML(room) {
   <div class="rct-row"><span class="label">Room</span><span class="value">${room.room_name}</span></div>
   <div class="rct-row"><span class="label">Type</span><span class="value">${room.room_type ?? '—'}</span></div>
   <div class="rct-row"><span class="label">Check-in</span><span class="value">${_fmtDate(room.check_in)}</span></div>
-  <div class="rct-row"><span class="label">Check-out</span><span class="value">${_fmtDate(new Date().toISOString())}</span></div>
+  <div class="rct-row"><span class="label">Check-out</span><span class="value">${departure}</span></div>
   <div class="rct-row"><span class="label">Nights</span><span class="value">${nights}</span></div>
   ${room.booking_id ? `<div class="rct-row"><span class="label">Booking ID</span><span class="value" style="font-size:7.5pt">${room.booking_id}</span></div>` : ''}
 
@@ -166,11 +197,11 @@ function _buildReceiptHTML(room) {
   <!-- PAYMENT NOTE -->
   <div class="rct-row" style="font-size:8pt">
     <span class="label">Payment method</span>
-    <span class="value">Cash / M-PESA</span>
+    <span class="value">${_paymentMethodLabel(paymentMethod)}</span>
   </div>
   <div class="rct-row" style="font-size:8pt">
     <span class="label">Status</span>
-    <span class="value">PAID IN FULL</span>
+    <span class="value">${_paymentStatusLabel(paymentStatus)}</span>
   </div>
 
   <!-- FOOTER -->

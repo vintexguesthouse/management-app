@@ -46,14 +46,6 @@ export async function fetchRooms() {
   }
 }
 
-function _formatPaymentMethod(method) {
-  if (!method) return null;
-  const val = method.toLowerCase();
-  if (val === "cash") return "Cash";
-  if (val === "mpesa") return "M-Pesa";
-  return method; // Return original if unknown
-}
-
 // 2. CHECK IN (POST to Airtable)
 export async function checkIn(payload) {
   try {
@@ -97,7 +89,6 @@ export async function checkIn(payload) {
 // trusting every caller (modal code, future scripts, etc.) to remember.
 
 const AIRTABLE_BATCH_LIMIT = 10;
-const FORMULA_FIELDS = ["rate_variance", "grand_total"];
 
 /** Splits an array into chunks of at most `size` items. */
 function _chunk(array, size) {
@@ -253,6 +244,102 @@ export async function checkOut(airtableId, payload) {
   } catch (err) {
     return _handleError(err);
   }
+}
+
+// ─────────────────────────────────────────────────────
+// 3b. BULK CHECK OUT (Batch PATCH to Airtable)
+// ─────────────────────────────────────────────────────
+//
+// Mirrors bulkCheckIn()'s batching/rate-limit reasoning exactly, just
+// on the update side: Airtable's batch-update endpoint accepts the
+// same shape (PATCH with an array of records) and the same 10-record
+// cap, so a group checkout is chunked and sent as sequential batches
+// too — giving check-out the same resilience to partial Airtable
+// failures that bulkCheckIn already gives check-in, instead of firing
+// N individual PATCH requests and losing track of which ones landed.
+//
+// Every room in a group checkout writes the SAME payment fields
+// (method / reference / status), so unlike bulkCheckIn there's no
+// per-record field variation — just the shared `fields` object
+// attached to each id.
+
+/**
+ * Bulk-closes booking records for a group checkout.
+ *
+ * @param {string[]} bookingIds - Airtable record ids to close.
+ * @param {Object} payload - Shared fields for every record in the group,
+ *   e.g. { payment_method, payment_reference, payment_status }.
+ *
+ * @returns {Promise<{
+ *   ok: boolean,
+ *   closed_ids?: string[],       // Airtable record ids that closed successfully
+ *   partial?: boolean,           // true if some (but not all) batches failed
+ *   failedBatches?: Object[],    // [{ batchIndex, bookingIds, error }]
+ *   error?: string
+ * }>}
+ */
+export async function bulkCheckOut(bookingIds, payload) {
+  if (!Array.isArray(bookingIds) || bookingIds.length === 0) {
+    return { ok: false, error: "bulkCheckOut requires a non-empty array of booking ids." };
+  }
+
+  const dataToSave = {
+    ...payload,
+    is_active: false,
+    payment_status: "paid"
+  };
+  const fields = _sanitizeBookingFields(dataToSave, true);
+
+  const batches = _chunk(bookingIds, AIRTABLE_BATCH_LIMIT);
+  const closedIds = [];
+  const failedBatches = [];
+
+  for (let i = 0; i < batches.length; i++) {
+    const batch = batches[i];
+    const payloadBody = {
+      records: batch.map((id) => ({ id, fields }))
+    };
+
+    _logPayload(`PATCH /bookings (checkout batch ${i + 1}/${batches.length})`, payloadBody);
+
+    try {
+      const response = await fetch(`${AIRTABLE_URL}/bookings`, {
+        method: "PATCH",
+        headers: getHeaders(),
+        body: JSON.stringify(payloadBody)
+      });
+
+      if (!response.ok) {
+        const errResult = await _handleError(`HTTP ${response.status}: batch ${i + 1} failed`, response);
+        failedBatches.push({
+          batchIndex: i,
+          bookingIds: batch,
+          error: errResult.error
+        });
+        continue; // One bad batch shouldn't sink rooms in the other batches.
+      }
+
+      const data = await response.json();
+      data.records.forEach((r) => closedIds.push(r.id));
+    } catch (err) {
+      const errResult = await _handleError(err);
+      failedBatches.push({
+        batchIndex: i,
+        bookingIds: batch,
+        error: errResult.error
+      });
+    }
+  }
+
+  if (failedBatches.length === 0) {
+    return { ok: true, closed_ids: closedIds };
+  }
+
+  if (closedIds.length === 0) {
+    return { ok: false, error: "All checkout batches failed.", failedBatches };
+  }
+
+  return { ok: true, partial: true, closed_ids: closedIds, failedBatches };
 }
 
 // 4. FETCH BOOKINGS (the relational counterpart to fetchRooms)

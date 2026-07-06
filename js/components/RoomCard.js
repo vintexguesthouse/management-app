@@ -30,7 +30,7 @@ const ROOM_TYPE_LABELS = {
 
 /**
  * Returns Tailwind classes for the card based on status.
- * @param {'available'|'occupied'} status
+ * @param {'available'|'occupied'|'error'} status
  * @returns {{ card: string, badge: string, ring: string, dot: string }}
  */
 function _themeForStatus(status) {
@@ -41,6 +41,15 @@ function _themeForStatus(status) {
       ring:  'ring-red-600/30',
       dot:   'bg-red-400',
       rate:  'text-red-300',
+    };
+  }
+  if (status === 'error') {
+    return {
+      card:  'border-amber-600/70 hover:border-amber-400',
+      badge: 'bg-amber-900/60 text-amber-300 border border-amber-700/50',
+      ring:  'ring-amber-500/50',
+      dot:   'bg-amber-400',
+      rate:  'text-amber-300',
     };
   }
   return {
@@ -83,6 +92,7 @@ function _ksh(amount) {
 export function renderRoomCard(room) {
   const theme     = _themeForStatus(room.status);
   const isOccupied = room.status === 'occupied';
+  const isError    = room.status === 'error';
   const typeLabel  = ROOM_TYPE_LABELS[room.room_type] ?? room.room_type;
 
   const { ui } = getState();
@@ -104,10 +114,12 @@ export function renderRoomCard(room) {
   ].join(' ');
 
   // ── Status dot ──
+  // The pulsing "ping" ring implies "free and waiting" — only true for
+  // genuinely available rooms. Occupied AND error rooms both skip it.
   const dotHtml = `
     <span class="absolute top-3 right-3 flex items-center gap-1.5">
       <span class="relative flex h-2 w-2">
-        ${isOccupied ? '' : `<span class="animate-ping absolute inline-flex h-full w-full rounded-full ${theme.dot} opacity-60"></span>`}
+        ${!isOccupied && !isError ? `<span class="animate-ping absolute inline-flex h-full w-full rounded-full ${theme.dot} opacity-60"></span>` : ''}
         <span class="relative inline-flex rounded-full h-2 w-2 status-dot-pulse ${theme.dot}"></span>
       </span>
     </span>
@@ -131,9 +143,10 @@ export function renderRoomCard(room) {
   `;
 
   // ── Status badge ──
+  const statusLabel = isOccupied ? 'Occupied' : isError ? 'Needs Attention' : 'Available';
   const badgeHtml = `
     <span class="inline-block text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full mt-2 ${theme.badge}">
-      ${isOccupied ? 'Occupied' : 'Available'}
+      ${statusLabel}
     </span>
   `;
 
@@ -147,6 +160,18 @@ export function renderRoomCard(room) {
     </div>
   ` : '';
 
+  // ── Error detail (error only) ──
+  // A room in 'error' failed a write partway through a bulk operation —
+  // it is NOT free, so this stays visible instead of quietly reverting
+  // to the 'available' look the way a failed room used to.
+  const errorHtml = isError ? `
+    <div class="mt-2.5 pt-2.5 border-t border-gray-800">
+      <p class="text-xs text-amber-400/90 truncate" title="${room.error ?? 'Last write failed'}">
+        ${room.error ?? 'Last write failed — tap to retry.'}
+      </p>
+    </div>
+  ` : '';
+
   card.innerHTML = `
     ${dotHtml}
     ${nameHtml}
@@ -154,6 +179,7 @@ export function renderRoomCard(room) {
     ${rateHtml}
     ${badgeHtml}
     ${guestHtml}
+    ${errorHtml}
   `;
 
   return card;

@@ -69,7 +69,6 @@ let _anchor = null; // { Client_Booking_Ref, guest_name } — used to find relat
 let _onAddShopCallback = null; // (room, { item_name, item_price, quantity }) => void
 let _onCheckOutCallback = null; // ({ rooms, payment_method, payment_reference }) => void
 let _getRelatedRoomsCallback = null; // (anchor, excludedRoomNames) => Object[]
-let _getAvailableRoomsCallback = null;
 
 // ─────────────────────────────────────────────────────
 // Internal helpers
@@ -216,31 +215,28 @@ function _buildRoomBlock(room) {
   `;
 }
 
-/** Builds the "Add Room" dropdown. Now hybrid: shows related AND available rooms. */
+/** Builds the "Add Room" dropdown — occupied siblings sharing this stay's anchor only. */
 function _buildAddRoomRow() {
   const excluded = _activeGroupNames();
 
-  // 1. Get occupied siblings (from the callback injected by main.js)
+  // Related occupied rooms only. An earlier version also listed fresh
+  // "available" rooms here, but nothing in this file ever created a
+  // booking for one if picked — there's no check-in path inside
+  // checkout — so selecting it was a silent no-op. Restricting the
+  // source to getRelatedRooms() means every option this dropdown shows
+  // is now actually addable.
   const related = _getRelatedRoomsCallback?.(_anchor, excluded) ?? [];
 
-  // 2. Get available rooms (newly injected callback for the hybrid model)
-  const available = _getAvailableRoomsCallback?.(excluded) ?? [];
-
-  const allOptions = [...related, ...available];
-
-  if (allOptions.length === 0) {
+  if (related.length === 0) {
     return `
       <div class="rounded-lg border border-dashed border-gray-800 px-4 py-3 text-xs text-gray-600 italic">
-        No other rooms available to add.
+        No other rooms in this stay to add.
       </div>
     `;
   }
 
-  const optionsHtml = allOptions
-    .map((r) => {
-      const label = r.status === "occupied" ? `${r.room_name} (Sibling)` : `${r.room_name} (Available)`;
-      return `<option value="${r.room_name}">${label}</option>`;
-    })
+  const optionsHtml = related
+    .map((r) => `<option value="${r.room_name}">${r.room_name} (Sibling)</option>`)
     .join("");
 
   return `
@@ -367,20 +363,6 @@ function _refreshRoomsSection() {
   }
 
   _wireAddRoomRow();
-
-  // 2. IMPORTANT: Re-wire the "Remove" buttons
-  // You need this function to exist to handle clicks on the delete icons
-  _wireRemoveRoomButtons();
-}
-
-function _wireRemoveRoomButtons() {
-  document.querySelectorAll(".btn-remove-room").forEach((btn) => {
-    btn.addEventListener("click", (e) => {
-      const roomName = e.target.closest("button").dataset.room;
-      _activeGroup = _activeGroup.filter((r) => r.room_name !== roomName);
-      _refreshRoomsSection(); // Recursively refresh to update UI and re-wire
-    });
-  });
 }
 
 // ─────────────────────────────────────────────────────
@@ -520,7 +502,7 @@ function _wireCheckOutPanel() {
  * }} callbacks
  */
 export function openModal(room, callbacks) {
-  const { onAddShop, onCheckOut, getRelatedRooms, getAvailableRooms } = callbacks;
+  const { onAddShop, onCheckOut, getRelatedRooms } = callbacks;
 
   const modal = document.getElementById("checkout-modal");
   const overlay = document.getElementById("modal-overlay");
@@ -539,7 +521,6 @@ export function openModal(room, callbacks) {
   _onAddShopCallback = onAddShop;
   _onCheckOutCallback = onCheckOut;
   _getRelatedRoomsCallback = typeof getRelatedRooms === "function" ? getRelatedRooms : () => [];
-  _getAvailableRoomsCallback = callbacks.getAvailableRooms;
 
   // Inject HTML
   modal.innerHTML = _buildCheckOutPanel();

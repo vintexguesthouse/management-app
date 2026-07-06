@@ -21,6 +21,8 @@ import {
   setRooms,
   setActiveRoom,
   patchRoom,
+  bulkPatchRooms,
+  markRoomsError,
   setExpenses,
   addExpense,
   patchExpense,
@@ -37,9 +39,9 @@ import {
 import {
   fetchRooms,
   fetchBookings,
-  checkIn,
+  bulkCheckIn,
+  bulkCheckOut,
   addShopItem,
-  checkOut,
   fetchExpenses,
   addExpenseAPI,
   patchExpenseAPI,
@@ -753,7 +755,7 @@ function _onCardClick(room) {
       getAvailableRooms: (excluded) => getAvailableRooms(excluded),
       ownerMode: getActiveRole() === "owner"
     });
-  }else if (room.status === "occupied") {
+  } else if (room.status === "occupied") {
     openCheckOutModal(room, {
       onAddShop: _handleAddShop,
       onCheckOut: _handleCheckOut,
@@ -761,6 +763,14 @@ function _onCardClick(room) {
       getRelatedRooms: (anchor, excluded) => getRelatedRooms(anchor, excluded), 
       getAvailableRooms: (excluded) => getAvailableRooms(excluded)
     });
+  } else if (room.status === "error") {
+    // A failed check-in/checkout write — not a modal-worthy state yet,
+    // just point the attendant at what to do next.
+    showToast(
+      "info",
+      "This room needs attention",
+      room.error ?? "The last write to Airtable failed. Refresh, then retry."
+    );
   }
 }
 
@@ -779,10 +789,13 @@ async function _handleCheckIn(groupFormData) {
 
   setSyncStatus("saving");
 
-  // Optimistic UI update for every room in this check-in
+  // Optimistic UI update for every room in this check-in, as a single
+  // atomic state emit (one grid re-render, not one per room).
+  const optimisticPatches = {};
   roomsData.forEach((formData) => {
-    patchRoom(formData.room_name, {
+    optimisticPatches[formData.room_name] = {
       status: "occupied",
+      error: null,
       guest_name: formData.guest_name,
       nights: formData.nights,
       room_type: formData.room_type,
@@ -812,8 +825,9 @@ async function _handleCheckIn(groupFormData) {
         Client_Booking_Ref: formData.Client_Booking_Ref,
         is_active: true
       }
-    });
+    };
   });
+  bulkPatchRooms(optimisticPatches);
 
   closeCheckInModal();
   clearSelection();
@@ -825,79 +839,92 @@ async function _handleCheckIn(groupFormData) {
     guestLabel
   );
 
-  // Fire one Airtable checkIn call per room, in parallel.
-  const results = await Promise.all(
-    roomsData.map(async (formData) => {
-      const airtablePayload = {
-        room_name: formData.room_name,
-        guest_name: formData.guest_name,
-        nights: Number(formData.nights),
-        check_in: checkInTimestamp.split("T")[0], // This sends "2026-06-30" instead of the full timestamp
-        room_type: formData.room_type,
-        base_rate: Number(formData.base_rate),
-        charged_rate: Number(formData.charged_rate),
-        shop_charge: 0,
-        payment_status: paymentStatus,
-        payment_method,
-        payment_reference,
-        is_active: true,
-        created_by,
-        // Same ref CheckInModal generated for the whole group — this is
-        // the anchor state.js/CheckOutModal use to find sibling rooms.
-        Client_Booking_Ref: formData.Client_Booking_Ref
-      };
+  // Write the whole group via bulkCheckIn — chunked into Airtable's
+  // 10-record batch limit and sent as sequential batches, instead of
+  // firing N individual checkIn() calls in parallel (which is exactly
+  // the per-base rate-limit risk bulkCheckIn's own header comment warns
+  // about under real front-desk load).
+  const recordsArray = roomsData.map((formData) => ({
+    room_name: formData.room_name,
+    guest_name: formData.guest_name,
+    nights: Number(formData.nights),
+    check_in: checkInTimestamp.split("T")[0], // This sends "2026-06-30" instead of the full timestamp
+    room_type: formData.room_type,
+    base_rate: Number(formData.base_rate),
+    charged_rate: Number(formData.charged_rate),
+    shop_charge: 0,
+    payment_status: paymentStatus,
+    payment_method,
+    payment_reference,
+    is_active: true,
+    created_by,
+    // Same ref CheckInModal generated for the whole group — this is
+    // the anchor state.js/CheckOutModal use to find sibling rooms.
+    Client_Booking_Ref: formData.Client_Booking_Ref
+  }));
 
-      const result = await checkIn(airtablePayload);
-      return { formData, result };
-    })
-  );
+  const result = await bulkCheckIn(recordsArray);
 
-  const succeeded = results.filter((r) => r.result.ok);
-  const failed = results.filter((r) => !r.result.ok);
+  if (!result.ok) {
+    // Total failure — nothing in the group landed on Airtable's side.
+    // Flag every room 'error' rather than quietly reverting to
+    // 'available', since the front desk needs to see and retry these.
+    setSyncStatus("error");
+    markRoomsError(
+      roomsData.map((fd) => fd.room_name),
+      result.error ?? "Check-in failed to save."
+    );
+    showToast("error", "Check-in failed", result.error ?? `${roomsData.length} room(s) could not be saved.`);
+    setTimeout(_loadRooms, 3000);
+    return;
+  }
 
-  succeeded.forEach(({ formData, result }) => {
-    if (result.booking_id) {
-      const { rooms } = getState();
-      const current = rooms.find((r) => r.room_name === formData.room_name);
-      patchRoom(formData.room_name, {
-        booking_id: result.booking_id,
-        activeBooking: { ...(current?.activeBooking ?? {}), airtable_id: result.booking_id }
-      });
-    }
+  // bulkCheckIn processes batches in order and only omits a room's id
+  // from booking_ids if its batch failed — so filtering roomsData down
+  // to the names NOT reported in any failedBatches gives back the exact
+  // subset that succeeded, still in original order, ready to zip
+  // against booking_ids positionally.
+  const failedRoomNames = new Set((result.failedBatches ?? []).flatMap((b) => b.rooms ?? []));
+  const succeededFormData = roomsData.filter((fd) => !failedRoomNames.has(fd.room_name));
+  const failedFormData = roomsData.filter((fd) => failedRoomNames.has(fd.room_name));
+
+  // Write the real Airtable booking_id into each successful room, one emit.
+  const successPatches = {};
+  succeededFormData.forEach((formData, idx) => {
+    const bookingId = result.booking_ids?.[idx];
+    if (!bookingId) return;
+    const { rooms } = getState();
+    const current = rooms.find((r) => r.room_name === formData.room_name);
+    successPatches[formData.room_name] = {
+      booking_id: bookingId,
+      activeBooking: { ...(current?.activeBooking ?? {}), airtable_id: bookingId }
+    };
   });
+  if (Object.keys(successPatches).length > 0) bulkPatchRooms(successPatches);
 
-  failed.forEach(({ formData }) => {
-    patchRoom(formData.room_name, {
-      status: "available",
-      guest_name: null,
-      nights: null,
-      charged_rate: null,
-      payment_status: null,
-      payment_method: null,
-      payment_reference: null,
-      check_in: null,
-      booking_id: null,
-      Client_Booking_Ref: null,
-      activeBooking: null
-    });
-  });
+  if (failedFormData.length > 0) {
+    markRoomsError(
+      failedFormData.map((fd) => fd.room_name),
+      "Check-in failed to save — please retry."
+    );
+  }
 
-  if (failed.length === 0) {
+  if (failedFormData.length === 0) {
     setSyncStatus("synced");
     showToast(
       "success",
       "Checked in!",
       isGroup ? `${roomsData.length} rooms → ${guestLabel}` : `${roomsData[0].room_name} → ${guestLabel}`
     );
-  } else if (succeeded.length === 0) {
+  } else if (succeededFormData.length === 0) {
     setSyncStatus("error");
-    showToast("error", "Check-in failed", failed[0].result.error);
+    showToast("error", "Check-in failed", result.error ?? "All rooms failed to save.");
   } else {
     setSyncStatus("error");
     showToast(
       "error",
       "Partial check-in failure",
-      `${failed.length} of ${roomsData.length} room(s) failed to save.`
+      `${failedFormData.length} of ${roomsData.length} room(s) failed to save.`
     );
   }
 
@@ -954,56 +981,95 @@ async function _handleAddShop({ item_name, item_price, quantity }) {
 async function _handleCheckOut(payload) {
   console.log("Processing Group Checkout:", payload);
 
-  const { rooms, payment_method, payment_reference, payment_status } = payload;
-  
-  if (!rooms || rooms.length === 0) return;
+  const { rooms: bookingIds, payment_method, payment_reference, payment_status } = payload;
 
-  showToast("info", `Checking out ${rooms.length} rooms...`);
+  if (!bookingIds || bookingIds.length === 0) return;
 
-  // 1. Process API updates for every room in the group
-  for (const bookingId of rooms) {
-    const result = await checkOut(bookingId, {
-      payment_method: payment_method,
-      payment_reference: payment_reference,
-      payment_status: payment_status
-    });
+  showToast("info", `Checking out ${bookingIds.length} room${bookingIds.length !== 1 ? "s" : ""}...`);
+  setSyncStatus("saving");
 
-    if (!result.ok) {
-      showToast("error", "Check-out failed for one or more rooms", result.error);
-      return; // Stop if any single request fails
-    }
-  }
-
-  // 2. Update local state for all rooms processed
-  // We use the rooms array (IDs) to find which rooms to clear in our local state
+  // Snapshot now — used purely to map booking_id -> room_name below, and
+  // that mapping doesn't change while these awaits are in flight.
   const stateRooms = getState().rooms;
-  
-  for (const bookingId of rooms) {
-    const roomToClear = stateRooms.find(r => r.booking_id === bookingId);
-    if (roomToClear) {
-      patchRoom(roomToClear.room_name, {
-        status: "available",
-        guest_name: null,
-        check_in: null,
-        booking_id: null,
-        charged_rate: null,
-        payment_status: null,
-        shop_total: 0,
-        shop_items: [],
-        nights: null,
-        // Clear the group anchor too — otherwise this room sits
-        // "available" while still carrying its previous stay's ref,
-        // which is stale data even though it's harmless to matching
-        // (getRelatedRooms only looks at occupied rooms).
-        Client_Booking_Ref: null,
-        activeBooking: null
-      });
-    }
+
+  // Mirrors bulkCheckIn's batching: chunked into Airtable's 10-record
+  // limit, sent as sequential batches, so a group checkout gets the same
+  // partial-failure visibility check-in has instead of the previous
+  // sequential-PATCH-loop bailing on the first failure and leaving
+  // already-closed rooms stuck showing 'occupied' in local state.
+  const result = await bulkCheckOut(bookingIds, {
+    payment_method,
+    payment_reference,
+    payment_status
+  });
+
+  if (!result.ok) {
+    // Total failure — nothing in the group actually closed on Airtable's
+    // side. Flag every room 'error' so the front desk sees it needs a
+    // retry, instead of leaving them looking like a normal occupied room.
+    setSyncStatus("error");
+    const roomNames = bookingIds
+      .map((id) => stateRooms.find((r) => r.booking_id === id)?.room_name)
+      .filter(Boolean);
+    markRoomsError(roomNames, result.error ?? "Checkout failed to save.");
+    showToast("error", "Checkout failed", result.error ?? "Could not check out any rooms.");
+    return;
   }
 
-  // 3. Finalize
+  const failedIds = new Set((result.failedBatches ?? []).flatMap((b) => b.bookingIds ?? []));
+  const succeededIds = bookingIds.filter((id) => !failedIds.has(id));
+  const failedRoomNames = bookingIds
+    .filter((id) => failedIds.has(id))
+    .map((id) => stateRooms.find((r) => r.booking_id === id)?.room_name)
+    .filter(Boolean);
+
+  // Reset every successfully-closed room to 'available' in one atomic emit.
+  const successPatches = {};
+  succeededIds.forEach((id) => {
+    const room = stateRooms.find((r) => r.booking_id === id);
+    if (!room) return;
+    successPatches[room.room_name] = {
+      status: "available",
+      error: null,
+      guest_name: null,
+      check_in: null,
+      booking_id: null,
+      charged_rate: null,
+      payment_status: null,
+      shop_total: 0,
+      shop_items: [],
+      nights: null,
+      // Clear the group anchor too — otherwise this room sits
+      // "available" while still carrying its previous stay's ref.
+      Client_Booking_Ref: null,
+      activeBooking: null
+    };
+  });
+  if (Object.keys(successPatches).length > 0) bulkPatchRooms(successPatches);
+
+  if (failedRoomNames.length > 0) {
+    // The PATCH for these didn't confirm — they're still occupied on
+    // Airtable's side, so 'error' (not 'available') is the honest state.
+    markRoomsError(failedRoomNames, "Checkout failed to save — please retry.");
+  }
+
   closeCheckOutModal();
-  showToast("success", "Checked out!", "All rooms are now available.");
+
+  if (failedRoomNames.length === 0) {
+    setSyncStatus("synced");
+    showToast("success", "Checked out!", "All rooms are now available.");
+  } else if (succeededIds.length === 0) {
+    setSyncStatus("error");
+    showToast("error", "Checkout failed", result.error ?? "No rooms were checked out.");
+  } else {
+    setSyncStatus("error");
+    showToast(
+      "error",
+      "Partial checkout failure",
+      `${failedRoomNames.length} of ${bookingIds.length} room(s) failed to check out.`
+    );
+  }
+
   await _loadRooms(); // Refresh the list from the source of truth
 }
 
