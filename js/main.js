@@ -997,7 +997,7 @@ async function _handleCheckOut(payload) {
   // partial-failure visibility check-in has instead of the previous
   // sequential-PATCH-loop bailing on the first failure and leaving
   // already-closed rooms stuck showing 'occupied' in local state.
-  const result = await bulkCheckOut(data.rooms, {
+  const result = await bulkCheckOut(payload.rooms, {
     payment_method: data.payment_method,
     payment_reference: data.payment_reference,
     status: "paid"
