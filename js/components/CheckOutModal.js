@@ -181,6 +181,12 @@ function _buildRoomBlock(room) {
 
       <div class="flex justify-between">
         <span class="text-xs text-gray-500">Nights</span>
+        <input type="number" 
+         data-room="${room.room_name}" 
+         data-action="update-nights"
+         value="${room.selected_nights ?? booking.nights ?? 1}" 
+         min="1" 
+         class="w-12 bg-gray-900 border border-gray-700 rounded px-1 text-right text-xs text-white" />
         <span class="text-xs text-gray-300 font-mono">${booking.nights ?? room.nights ?? "—"}</span>
       </div>
       <div class="flex justify-between">
@@ -235,9 +241,7 @@ function _buildAddRoomRow() {
     `;
   }
 
-  const optionsHtml = related
-    .map((r) => `<option value="${r.room_name}">${r.room_name} (Sibling)</option>`)
-    .join("");
+  const optionsHtml = related.map((r) => `<option value="${r.room_name}">${r.room_name} (Sibling)</option>`).join("");
 
   return `
     <div class="flex items-center gap-2">
@@ -263,11 +267,33 @@ function _buildRoomsSection() {
       ${isGroup ? `Rooms (${_activeGroup.length})` : "Room"}
     </p>
     <div id="co-rooms-list" class="space-y-3">
-      ${_activeGroup.map(_buildRoomBlock).join("")}
+      ${_activeGroup
+        .map(
+          (r) => `
+        <div class="flex items-center justify-between p-3 border border-gray-700 rounded-lg bg-gray-900">
+          <div>
+            <p class="text-sm font-semibold text-white">${r.room_name}</p>
+            <p class="text-xs text-gray-400">${r.room_type ?? "Room"}</p>
+          </div>
+          <div class="flex items-center gap-3">
+            <div class="text-right">
+              <label class="text-[9px] text-gray-500 uppercase block">Nights</label>
+              <input type="number" 
+                     class="room-nights-input w-12 bg-gray-800 border border-gray-600 rounded text-center text-sm text-white"
+                     value="${r.selected_nights ?? r.nights ?? 1}"
+                     min="1"
+                     data-room-name="${r.room_name}" />
+            </div>
+            <div class="text-sm font-mono text-gray-300 w-16 text-right">
+              ${_ksh(Number(r.charged_rate ?? r.base_rate) * (r.selected_nights ?? r.nights ?? 1))}
+            </div>
+          </div>
+        </div>
+      `
+        )
+        .join("")}
     </div>
-    <div class="mt-3">
-      ${_buildAddRoomRow()}
-    </div>
+    <div class="mt-3">${_buildAddRoomRow()}</div>
     <div class="flex justify-between mt-4 pt-3 border-t border-gray-800">
       <span class="text-xs font-semibold text-gray-400">Grand total</span>
       <span id="co-grand-total-display" class="text-sm font-bold text-amber-300 font-mono">${_ksh(_groupGrandTotal())}</span>
@@ -343,26 +369,30 @@ function _buildCheckOutPanel() {
 /**
  * Re-renders the room list, add-room dropdown, grand total, header,
  * and checkout-button label — WITHOUT touching #co-payment-fields, so
- * an in-progress payment method / reference entry survives a room
+ * an in-progress?.addEventListener("click", () => { payment method / reference entry survives a room
  * being added or removed.
  */
 function _refreshRoomsSection() {
   const isGroup = _activeGroup.length > 1;
 
   const headerTitle = document.getElementById("co-header-title");
-  if (headerTitle) {
+  if (headerTitle) 
     headerTitle.textContent = isGroup ? `${_activeGroup.length} Rooms` : _activeGroup[0].room_name;
-  }
-
-  const roomsSection = document.getElementById("co-rooms-section");
-  if (roomsSection) roomsSection.innerHTML = _buildRoomsSection();
+  
 
   const checkoutLabel = document.getElementById("co-checkout-btn-label");
-  if (checkoutLabel) {
+  if (checkoutLabel) 
     checkoutLabel.textContent = isGroup ? `Check Out ${_activeGroup.length} Rooms` : "Check Out";
-  }
+  
+  // 2. Re-render the container
+  const roomsSection = document.getElementById("co-rooms-section");
+  if (roomsSection) {
+    roomsSection.innerHTML = _buildRoomsSection();
 
-  _wireAddRoomRow();
+    // 3. CRITICAL: Re-attach all listeners AFTER the HTML is replaced
+    _wireAddRoomRow(); // Re-bind the Add Room button
+    _wireRoomsSection(); // Re-bind the Nights inputs
+  }
 }
 
 // ─────────────────────────────────────────────────────
@@ -384,12 +414,43 @@ function _wireAddRoomRow() {
     console.log("Current Candidates:", candidates);
     const room = candidates.find((r) => r.room_name === roomName);
     if (!room) {
-    console.log("Room not found in candidates list!");
-    return;
-  }
+      console.log("Room not found in candidates list!");
+      return;
+    }
 
-    _activeGroup.push(room);
+    _activeGroup.push({
+      ...room,
+      selected_nights: 1 // Default to 1 night for newly added rooms
+    });
     _refreshRoomsSection();
+  });
+}
+
+function _wireRoomsSection() {
+  const inputs = document.querySelectorAll(".room-nights-input");
+  inputs.forEach((input) => {
+    input.addEventListener("change", (e) => {
+      const roomName = e.target.getAttribute("data-room-name");
+      const newNights = parseInt(e.target.value) || 1;
+
+      // Update the data
+      const room = _activeGroup.find((r) => r.room_name === roomName);
+      if (room) {
+        room.selected_nights = newNights;
+      }
+
+      // Update the Grand Total display and UI
+      document.getElementById("co-grand-total-display").innerText = _ksh(_groupGrandTotal());
+      // Optional: If you want individual row prices to update immediately,
+      // call _refreshRoomsSection() here instead of just the total
+      // 2. Refresh the individual subtotal for THIS room
+      // We look for the subtotal element using the selector we defined in _buildRoomBlock
+      const subtotalEl = document.querySelector(`[data-room-subtotal="${roomName}"]`);
+      if (subtotalEl) {
+        const subtotal = Number(room.charged_rate ?? room.base_rate) * newNights;
+        subtotalEl.textContent = _ksh(subtotal);
+      }
+    });
   });
 }
 
@@ -447,9 +508,8 @@ function _wireCheckOutPanel() {
   // Add-room dropdown (rebuilt each refresh, wire it fresh here too)
   _wireAddRoomRow();
 
-  // Print — does not check anyone out, just prints one receipt per room
   document.getElementById("btn-print-receipt")?.addEventListener("click", () => {
-    _activeGroup.forEach((room) => printReceipt(room));
+    printReceipt(_activeGroup);
   });
 
   // Checkout

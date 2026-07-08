@@ -90,52 +90,53 @@ function _calcDeparture(iso, nights) {
 // ─────────────────────────────────────────────────────
 
 /**
- * Builds the complete receipt HTML string.
- *
- * @param {Object} room - Room object from state (occupied, about to be checked out).
+ * Builds the complete receipt HTML string for one or multiple rooms.
+ * @param {Array} rooms - Array of room objects (or a single room object).
  * @returns {string}
  */
-function _buildReceiptHTML(room) {
-  const chargedRate = Number(room.charged_rate ?? room.base_rate);
-  const nights      = Number(room.nights ?? 1);
-  const departure = _calcDeparture(room.check_in, nights);
-  const roomTotal   = chargedRate * nights;
-  const shopTotal   = Number(room.shop_total ?? 0);
-  const grandTotal  = roomTotal + shopTotal;
-  const isDiscounted = chargedRate < Number(room.base_rate);
+function _buildConsolidatedReceipt(rooms) {
+  // Ensure we are working with an array
+  const roomList = Array.isArray(rooms) ? rooms : [rooms];
+  
+  // 1. Calculations
+  const roomTotals = roomList.map(r => ({
+    name: r.room_name,
+    nights: Number(r.selected_nights ?? r.nights ?? 1),
+    rate: Number(r.charged_rate ?? r.base_rate),
+    base: Number(r.base_rate),
+    total: Number(r.charged_rate ?? r.base_rate) * Number(r.selected_nights ?? r.nights ?? 1)
+  }));
 
-  // Fall back to activeBooking for these two — _mergeData() in main.js
-  // sets payment_status at the top level on every poll, but doesn't
-  // currently re-derive top-level payment_method after the first poll,
-  // so activeBooking (which always reflects the raw Airtable record)
-  // is the more reliable source once some time has passed since check-in.
-  const paymentMethod = room.payment_method ?? room.activeBooking?.payment_method ?? null;
-  const paymentStatus = room.payment_status ?? room.activeBooking?.payment_status ?? null;
+  const grandRoomTotal = roomTotals.reduce((sum, r) => sum + r.total, 0);
+  const shopTotal = roomList.reduce((sum, r) => sum + Number(r.shop_total ?? 0), 0);
+  const grandTotal = grandRoomTotal + shopTotal;
 
-  // ── Shop items rows ──
-  const shopItemsHTML = Array.isArray(room.shop_items) && room.shop_items.length > 0
-    ? room.shop_items.map(si => {
-        const qty      = si.qty ?? 1;
-        const price    = si.unit_price ?? si.price ?? 0;
-        const lineTotal = price * qty;
-        return `
-          <div class="rct-item-line">
-            <span>${si.name} x${qty}</span>
-            <span class="font-mono">${_ksh(lineTotal)}</span>
-          </div>`;
-      }).join('')
+  // 2. Build Room Charges Section
+  const roomChargesHTML = roomTotals.map(rt => `
+    <div class="rct-row">
+      <span class="label">${rt.name} (${rt.nights} nights)</span>
+      <span class="value font-mono">${_ksh(rt.total)}</span>
+    </div>
+    ${rt.rate < rt.base ? `<div class="rct-discount-note">* ${rt.name} reduced from ${_ksh(rt.base)}</div>` : ''}
+  `).join('');
+
+  // 3. Aggregate Shop Items
+  const allShopItems = roomList.flatMap(r => r.shop_items ?? []);
+  const shopItemsHTML = allShopItems.length > 0 
+    ? allShopItems.map(si => `
+        <div class="rct-item-line">
+          <span>${si.name} x${si.qty ?? 1}</span>
+          <span class="font-mono">${_ksh((si.unit_price ?? si.price ?? 0) * (si.qty ?? 1))}</span>
+        </div>`).join('')
     : `<div class="rct-item-line"><span style="color:#888;font-style:italic">None</span><span>—</span></div>`;
 
-  // ── Discount note ──
-  const discountHTML = isDiscounted ? `
-    <div class="rct-discount-note">
-      * Rate reduced from ${_ksh(room.base_rate)} (Director approved)
-    </div>` : '';
+  // 4. Metadata (Taken from first room, as they share the booking)
+  const first = roomList[0];
+  const paymentMethod = first.payment_method ?? first.activeBooking?.payment_method ?? null;
+  const paymentStatus = first.payment_status ?? first.activeBooking?.payment_status ?? null;
 
   return `
 <div class="receipt-wrapper">
-
-  <!-- HEADER -->
   <div class="rct-header">
     <h2>VINTEX GUEST HOUSE</h2>
     <p>Kimana, Kajiado County, Kenya</p>
@@ -146,37 +147,21 @@ function _buildReceiptHTML(room) {
     <p>Printed: ${_now()}</p>
   </div>
 
-  <!-- GUEST INFO -->
   <p class="rct-section-label">Guest Details</p>
-  <div class="rct-row"><span class="label">Name</span><span class="value font-semibold">${room.guest_name ?? '—'}</span></div>
-  <div class="rct-row"><span class="label">Room</span><span class="value">${room.room_name}</span></div>
-  <div class="rct-row"><span class="label">Type</span><span class="value">${room.room_type ?? '—'}</span></div>
-  <div class="rct-row"><span class="label">Check-in</span><span class="value">${_fmtDate(room.check_in)}</span></div>
-  <div class="rct-row"><span class="label">Check-out</span><span class="value">${departure}</span></div>
-  <div class="rct-row"><span class="label">Nights</span><span class="value">${nights}</span></div>
-  ${room.booking_id ? `<div class="rct-row"><span class="label">Booking ID</span><span class="value" style="font-size:7.5pt">${room.booking_id}</span></div>` : ''}
-
+  <div class="rct-row"><span class="label">Name</span><span class="value font-semibold">${first.guest_name ?? '—'}</span></div>
+  ${roomList.map(r => `<div class="rct-row"><span class="label">Room</span><span class="value">${r.room_name}</span></div>`).join('')}
+  
   <hr class="rct-divider" />
 
-  <!-- ROOM CHARGES -->
   <p class="rct-section-label">Room Charges</p>
-  <div class="rct-row">
-    <span class="label">Rate / night</span>
-    <span class="value font-mono">${_ksh(chargedRate)}</span>
-  </div>
-  <div class="rct-row">
-    <span class="label">Nights</span>
-    <span class="value">× ${nights}</span>
-  </div>
-  ${discountHTML}
+  ${roomChargesHTML}
   <div class="rct-row" style="font-weight:600">
     <span class="label">Room subtotal</span>
-    <span class="value font-mono">${_ksh(roomTotal)}</span>
+    <span class="value font-mono">${_ksh(grandRoomTotal)}</span>
   </div>
 
   <hr class="rct-divider" />
 
-  <!-- SHOP CHARGES -->
   <p class="rct-section-label">Shop / POS</p>
   ${shopItemsHTML}
   <div class="rct-row" style="font-weight:600;margin-top:3pt">
@@ -186,7 +171,6 @@ function _buildReceiptHTML(room) {
 
   <hr class="rct-divider-solid" />
 
-  <!-- GRAND TOTAL -->
   <div class="rct-total">
     <span class="tracking-widest">TOTAL DUE</span>
     <span class="font-mono">${_ksh(grandTotal)}</span>
@@ -194,7 +178,6 @@ function _buildReceiptHTML(room) {
 
   <hr class="rct-divider" />
 
-  <!-- PAYMENT NOTE -->
   <div class="rct-row" style="font-size:8pt">
     <span class="label">Payment method</span>
     <span class="value">${_paymentMethodLabel(paymentMethod)}</span>
@@ -204,18 +187,11 @@ function _buildReceiptHTML(room) {
     <span class="value">${_paymentStatusLabel(paymentStatus)}</span>
   </div>
 
-  <!-- FOOTER -->
   <div class="rct-footer">
     <p class="thank-you">Thank you for your stay!</p>
-    <p>We hope to see you again soon.</p>
-    <p style="margin-top:4pt;font-size:7pt;color:#777">
-      This is a computer-generated receipt.<br/>
-      Issued by Vintex Guest House PMS v1.0
-    </p>
+    <p style="margin-top:4pt;font-size:7pt;color:#777">Issued by Vintex Guest House PMS v1.0</p>
   </div>
-
-</div>
-  `.trim();
+</div>`.trim();
 }
 
 // ─────────────────────────────────────────────────────
@@ -233,7 +209,7 @@ function _buildReceiptHTML(room) {
  *
  * @param {Object} room - The room/booking data to print.
  */
-export function printReceipt(room) {
+export function printReceipt(rooms) {
   const layer = document.getElementById('receipt-print-layer');
   if (!layer) {
     console.error('[Receipt] #receipt-print-layer not found in DOM.');
@@ -241,7 +217,7 @@ export function printReceipt(room) {
   }
 
   // Inject receipt HTML
-  layer.innerHTML = _buildReceiptHTML(room);
+  layer.innerHTML = _buildConsolidatedReceipt(rooms);
   layer.classList.remove('hidden');
 
   // Small delay to ensure DOM paint before browser opens print dialog
