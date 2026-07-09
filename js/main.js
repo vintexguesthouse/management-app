@@ -935,41 +935,51 @@ async function _handleCheckIn(groupFormData) {
 // Shop item handler
 // ─────────────────────────────────────────────────────
 
-async function _handleAddShop({ item_name, item_price, quantity }) {
-  const { activeRoom } = getState();
-  if (!activeRoom) return;
+/**
+ * Shop item handler (Group-Aware)
+ * Called by CheckOutModal.js when an item is added to a specific room.
+ */
+async function _handleAddShop(room, { item_name, item_price, quantity }) {
+  // 1. Guard: Ensure we have a target room
+  if (!room) return;
 
   showToast("info", "Adding item…", `${quantity}× ${item_name}`);
 
+  // 2. Calculate local changes
   const lineTotal = item_price * quantity;
-  const prevShopTotal = Number(activeRoom.shop_total ?? 0);
+  const prevShopTotal = Number(room.shop_total ?? 0);
   const newShopTotal = prevShopTotal + lineTotal;
-  const roomSubtotal = Number(activeRoom.charged_rate ?? activeRoom.base_rate ?? 0) * Number(activeRoom.nights ?? 1);
-  const newGrandTotal = roomSubtotal + newShopTotal;
 
-  const result = await addShopItem(activeRoom.booking_id, {
-    new_shop_total: newShopTotal,
-    new_grand_total: newGrandTotal
+  // 3. API Call: Update the specific room's record via its booking_id
+  const result = await addShopItem(room.booking_id, {
+    new_shop_total: newShopTotal
   });
 
   if (result.ok) {
-    const prevItems = Array.isArray(activeRoom.shop_items) ? activeRoom.shop_items : [];
+    // 4. Update Global State: Patch the specific room
+    const prevItems = Array.isArray(room.shop_items) ? room.shop_items : [];
     const existingIdx = prevItems.findIndex((i) => i.name === item_name);
-    const updatedItems =
-      existingIdx >= 0
-        ? prevItems.map((i, idx) => (idx === existingIdx ? { ...i, qty: (i.qty ?? 1) + quantity } : i))
-        : [...prevItems, { name: item_name, unit_price: item_price, qty: quantity }];
+    
+    const updatedItems = existingIdx >= 0
+      ? prevItems.map((i, idx) => (idx === existingIdx ? { ...i, qty: (i.qty ?? 1) + quantity } : i))
+      : [...prevItems, { name: item_name, unit_price: item_price, qty: quantity }];
 
-    patchRoom(activeRoom.room_name, {
+    patchRoom(room.room_name, {
       shop_total: newShopTotal,
       shop_items: updatedItems
     });
 
-    const { activeRoom: updatedActive } = getState();
-    refreshRoomTotals(updatedActive);
-
-    showToast("success", "Item added", `${quantity}× ${item_name} — ${_ksh(lineTotal)}`);
+    // 5. Update Component UI: Fetch the updated state and refresh the modal
+    const { rooms } = getState();
+    const updatedRoom = rooms.find(r => r.room_name === room.room_name);
+    
+    if (updatedRoom) {
+      // refreshRoomTotals is imported from CheckOutModal.js
+      refreshRoomTotals(updatedRoom);
+      showToast("success", "Item added", `${quantity}× ${item_name} — ${_ksh(lineTotal)}`);
+    }
   } else {
+    // 6. Handle failure
     showToast("error", "Could not add item", result.error);
   }
 }
