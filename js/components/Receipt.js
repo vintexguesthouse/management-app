@@ -134,6 +134,8 @@ function _buildConsolidatedReceipt(rooms) {
   const first = roomList[0];
   const paymentMethod = first.payment_method ?? first.activeBooking?.payment_method ?? null;
   const paymentStatus = first.payment_status ?? first.activeBooking?.payment_status ?? null;
+  const checkInIso = first.check_in ?? first.activeBooking?.check_in ?? null;
+  const stayNights = Number(first.selected_nights ?? first.nights ?? first.activeBooking?.nights ?? 1);
 
   return `
 <div class="receipt-wrapper">
@@ -149,6 +151,8 @@ function _buildConsolidatedReceipt(rooms) {
 
   <p class="rct-section-label">Guest Details</p>
   <div class="rct-row"><span class="label">Name</span><span class="value font-semibold">${first.guest_name ?? '—'}</span></div>
+  <div class="rct-row"><span class="label">Check-in</span><span class="value">${_fmtDate(checkInIso)}</span></div>
+  <div class="rct-row"><span class="label">Check-out</span><span class="value">${_calcDeparture(checkInIso, stayNights)}</span></div>
   ${roomList.map(r => `<div class="rct-row"><span class="label">Room</span><span class="value">${r.room_name}</span></div>`).join('')}
   
   <hr class="rct-divider" />

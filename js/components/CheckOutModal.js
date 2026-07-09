@@ -157,14 +157,16 @@ function _buildExistingItemsHtml(room) {
  */
 function _buildRoomBlock(room) {
   const booking = room.activeBooking ?? {};
-  const id = _safeId(room.room_name);
   const canRemove = _activeGroup.length > 1;
   const subtotal = _roomSubtotal(room);
 
   return `
     <div class="rounded-lg bg-gray-800/60 border border-gray-700 px-4 py-3 space-y-3" data-room="${room.room_name}">
       <div class="flex items-center justify-between">
-        <p class="text-sm font-semibold text-white">${room.room_name}</p>
+        <div>
+          <p class="text-sm font-semibold text-white">${room.room_name}</p>
+          <p class="text-xs text-gray-400">${room.room_type ?? "Room"}</p>
+        </div>
         ${
           canRemove
             ? `<button type="button" data-action="remove-room" data-room="${room.room_name}"
@@ -179,15 +181,13 @@ function _buildRoomBlock(room) {
         }
       </div>
 
-      <div class="flex justify-between">
+      <div class="flex justify-between items-center">
         <span class="text-xs text-gray-500">Nights</span>
-        <input type="number" 
-         data-room="${room.room_name}" 
-         data-action="update-nights"
-         value="${room.selected_nights ?? booking.nights ?? 1}" 
-         min="1" 
-         class="w-12 bg-gray-900 border border-gray-700 rounded px-1 text-right text-xs text-white" />
-        <span class="text-xs text-gray-300 font-mono">${booking.nights ?? room.nights ?? "—"}</span>
+        <input type="number"
+         class="room-nights-input w-12 bg-gray-900 border border-gray-700 rounded px-1 text-right text-xs text-white"
+         data-room-name="${room.room_name}"
+         value="${room.selected_nights ?? booking.nights ?? 1}"
+         min="1" />
       </div>
       <div class="flex justify-between">
         <span class="text-xs text-gray-500">Room rate</span>
@@ -267,31 +267,7 @@ function _buildRoomsSection() {
       ${isGroup ? `Rooms (${_activeGroup.length})` : "Room"}
     </p>
     <div id="co-rooms-list" class="space-y-3">
-      ${_activeGroup
-        .map(
-          (r) => `
-        <div class="flex items-center justify-between p-3 border border-gray-700 rounded-lg bg-gray-900">
-          <div>
-            <p class="text-sm font-semibold text-white">${r.room_name}</p>
-            <p class="text-xs text-gray-400">${r.room_type ?? "Room"}</p>
-          </div>
-          <div class="flex items-center gap-3">
-            <div class="text-right">
-              <label class="text-[9px] text-gray-500 uppercase block">Nights</label>
-              <input type="number" 
-                     class="room-nights-input w-12 bg-gray-800 border border-gray-600 rounded text-center text-sm text-white"
-                     value="${r.selected_nights ?? r.nights ?? 1}"
-                     min="1"
-                     data-room-name="${r.room_name}" />
-            </div>
-            <div class="text-sm font-mono text-gray-300 w-16 text-right">
-              ${_ksh(Number(r.charged_rate ?? r.base_rate) * (r.selected_nights ?? r.nights ?? 1))}
-            </div>
-          </div>
-        </div>
-      `
-        )
-        .join("")}
+      ${_activeGroup.map((r) => _buildRoomBlock(r)).join("")}
     </div>
     <div class="mt-3">${_buildAddRoomRow()}</div>
     <div class="flex justify-between mt-4 pt-3 border-t border-gray-800">
@@ -507,6 +483,12 @@ function _wireCheckOutPanel() {
 
   // Add-room dropdown (rebuilt each refresh, wire it fresh here too)
   _wireAddRoomRow();
+
+  // Nights inputs rendered by _buildRoomBlock() on the initial panel
+  // build also need wiring here — _refreshRoomsSection() re-wires them
+  // on later add/remove-room refreshes, but that doesn't cover the
+  // very first render.
+  _wireRoomsSection();
 
   document.getElementById("btn-print-receipt")?.addEventListener("click", () => {
     printReceipt(_activeGroup);
