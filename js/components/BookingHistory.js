@@ -4,9 +4,21 @@
  * Renders a searchable, responsive table of past bookings
  * (is_active: false) for the owner-only History view.
  *
+ * IMPORTANT: #history-container in index.html is a <tbody>
+ * nested inside a table that already owns its <thead>
+ * (Guest / Room / Check-in / Check-out / Amount / Status / Actions).
+ * A <tbody> can only legally contain <tr> elements — setting its
+ * .innerHTML to a <div> toolbar or a nested <table> gets silently
+ * stripped/mangled by the browser's HTML parser. So this component
+ * ONLY ever writes <tr> strings into #history-container. The search
+ * input and result-count badge live in index.html itself
+ * (#history-search-input / #history-total-badge) and are wired up
+ * here rather than injected.
+ *
  * Exports:
- * - renderBookingHistory(bookings) → injects table + search bar into
- *   #history-container and wires up real-time filtering.
+ * - renderBookingHistory(bookings) → injects <tr> rows into
+ *   #history-container and wires up real-time filtering against
+ *   the existing #history-search-input.
  */
 
 // ─────────────────────────────────────────────────────
@@ -27,13 +39,26 @@ function _fmtDate(iso) {
   });
 }
 
-function _paymentMethodLabel(method) {
-  const labels = {
-    cash: "Cash",
-    mpesa: "M-Pesa",
-    bank_transfer: "Bank Transfer"
+/**
+ * Computes a checkout date from check_in + nights, since bookings
+ * don't store an explicit checkout date (mirrors Receipt.js's
+ * _calcDeparture()).
+ */
+function _calcCheckOut(iso, nights) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  d.setDate(d.getDate() + (parseInt(nights, 10) || 1));
+  return _fmtDate(d.toISOString());
+}
+
+function _paymentStatusBadge(status) {
+  const map = {
+    paid:    { label: "Paid",    cls: "bg-emerald-900/50 text-emerald-300 border-emerald-700/40" },
+    partial: { label: "Partial", cls: "bg-amber-900/50 text-amber-300 border-amber-700/40" },
+    unpaid:  { label: "Unpaid",  cls: "bg-red-900/50 text-red-300 border-red-700/40" }
   };
-  return labels[method] ?? method ?? "—";
+  const entry = map[status] ?? { label: status ?? "—", cls: "bg-gray-800 text-gray-400 border-gray-700" };
+  return `<span class="inline-block text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full border ${entry.cls}">${entry.label}</span>`;
 }
 
 /**
@@ -48,102 +73,57 @@ function _normalizeBooking(b) {
 
   return {
     id: b.airtable_id ?? b.id,
-    date: b.check_out ?? b.checked_out_at ?? b.updated_at ?? b.check_in ?? b.created_at ?? null,
+    check_in: b.check_in ?? null,
+    nights: Number(b.nights ?? 1),
+    sort_date: b.check_out ?? b.checked_out_at ?? b.updated_at ?? b.check_in ?? b.created_at ?? null,
     guest_name: b.guest_name ?? "—",
     room_name: b.room_name ?? "—",
     amount_paid: amountPaid,
-    payment_method: b.payment_method ?? null,
+    payment_status: b.payment_status ?? null,
     attendant: b.created_by ?? b.attendant ?? "—"
   };
 }
 
 // ─────────────────────────────────────────────────────
-// HTML builders
+// HTML builders — <tr> only, this is going straight into a <tbody>
 // ─────────────────────────────────────────────────────
-
-function _buildToolbarHTML(count) {
-  return `
-    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
-      <div class="relative w-full sm:max-w-xs">
-        <svg class="w-4 h-4 text-gray-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
-          fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-            d="M21 21l-4.35-4.35M11 19a8 8 0 100-16 8 8 0 000 16z" />
-        </svg>
-        <input id="bh-search" type="text" placeholder="Search by guest or room…"
-          class="w-full bg-gray-800 border border-gray-700 rounded-lg pl-9 pr-3 py-2.5 text-sm text-white
-                 placeholder-gray-600 focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500 transition-colors" />
-      </div>
-      <p id="bh-result-count" class="text-xs text-gray-500 shrink-0">${count} booking${count === 1 ? "" : "s"}</p>
-    </div>
-  `;
-}
 
 function _buildRowHTML(row) {
   return `
-    <tr class="bh-row border-b border-gray-800 last:border-0 hover:bg-gray-800/40 transition-all duration-200 hover:scale-[1.02] hover:shadow-xl"
+    <tr class="bh-row border-b border-gray-800 last:border-0 hover:bg-gray-800/40 transition-colors"
         data-guest="${(row.guest_name ?? "").toLowerCase()}"
         data-room="${(row.room_name ?? "").toLowerCase()}">
-      <td class="px-4 py-3 text-xs text-gray-400 font-mono whitespace-nowrap">${_fmtDate(row.date)}</td>
-      <td class="px-4 py-3 text-sm text-white font-semibold">${row.guest_name}</td>
-      <td class="px-4 py-3 text-sm text-gray-300">${row.room_name}</td>
-      <td class="px-4 py-3 text-sm text-emerald-400 font-mono font-semibold whitespace-nowrap">${_ksh(row.amount_paid)}</td>
-      <td class="px-4 py-3 text-xs">
-        <span class="inline-block px-2 py-0.5 rounded-full bg-gray-800 border border-gray-700 text-gray-300">
-          ${_paymentMethodLabel(row.payment_method)}
-        </span>
+      <td class="px-5 py-3 text-sm text-white font-semibold whitespace-nowrap">${row.guest_name}</td>
+      <td class="px-5 py-3 text-sm text-gray-300 whitespace-nowrap">${row.room_name}</td>
+      <td class="px-5 py-3 text-xs text-gray-400 font-mono whitespace-nowrap">${_fmtDate(row.check_in)}</td>
+      <td class="px-5 py-3 text-xs text-gray-400 font-mono whitespace-nowrap">${_calcCheckOut(row.check_in, row.nights)}</td>
+      <td class="px-5 py-3 text-sm text-emerald-400 font-mono font-semibold whitespace-nowrap text-right">${_ksh(row.amount_paid)}</td>
+      <td class="px-5 py-3 text-xs whitespace-nowrap text-right">${_paymentStatusBadge(row.payment_status)}</td>
+      <td class="px-5 py-3 text-xs whitespace-nowrap text-right">
+        <button type="button" data-action="delete-booking" data-booking-id="${row.id}"
+          class="bh-delete-btn text-[10px] px-2 py-1 rounded-md border transition-colors font-medium
+                 bg-gray-800 hover:bg-red-900/40 text-gray-500 hover:text-red-400 border-gray-700 hover:border-red-700">
+          Delete
+        </button>
       </td>
-      <td class="px-4 py-3 text-xs text-gray-500">${row.attendant}</td>
     </tr>
   `;
 }
 
-function _buildTableHTML(rows) {
-  if (rows.length === 0) {
-    return `
-      <div class="flex flex-col items-center justify-center py-16 gap-3 text-center">
-        <svg class="w-10 h-10 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
-            d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0
-               01.293.707V19a2 2 0 01-2 2z" />
-        </svg>
-        <p class="text-sm text-gray-600">No completed bookings yet.</p>
-      </div>`;
-  }
-
-  return `
-    <div class="overflow-x-auto rounded-xl border border-gray-800">
-      <table class="w-full text-left border-collapse">
-        <thead>
-          <tr class="bg-gray-900/80 border-b border-gray-800">
-            <th class="px-4 py-2.5 text-[10px] font-semibold uppercase tracking-wider text-gray-500 whitespace-nowrap">Date</th>
-            <th class="px-4 py-2.5 text-[10px] font-semibold uppercase tracking-wider text-gray-500">Guest Name</th>
-            <th class="px-4 py-2.5 text-[10px] font-semibold uppercase tracking-wider text-gray-500">Room</th>
-            <th class="px-4 py-2.5 text-[10px] font-semibold uppercase tracking-wider text-gray-500 whitespace-nowrap">Amount Paid</th>
-            <th class="px-4 py-2.5 text-[10px] font-semibold uppercase tracking-wider text-gray-500">Payment Method</th>
-            <th class="px-4 py-2.5 text-[10px] font-semibold uppercase tracking-wider text-gray-500">Attendant</th>
-          </tr>
-        </thead>
-        <tbody id="bh-table-body">
-          ${rows.map(_buildRowHTML).join("")}
-        </tbody>
-      </table>
-    </div>
-    <p id="bh-no-results" class="hidden text-center text-sm text-gray-600 py-10">No bookings match your search.</p>
-  `;
-}
-
 // ─────────────────────────────────────────────────────
-// Search wiring
+// Search wiring — uses the existing #history-search-input in index.html
 // ─────────────────────────────────────────────────────
 
-function _wireSearch() {
-  const input = document.getElementById("bh-search");
-  const resultCount = document.getElementById("bh-result-count");
-  const noResults = document.getElementById("bh-no-results");
+function _wireSearch(total) {
+  const input = document.getElementById("history-search-input");
+  const badge = document.getElementById("history-total-badge");
+  const emptyState = document.getElementById("history-empty-state");
   if (!input) return;
 
-  input.addEventListener("input", () => {
+  // Reset any previous search text/listener state between renders.
+  input.value = "";
+
+  const handler = () => {
     const query = input.value.trim().toLowerCase();
     const rows = document.querySelectorAll(".bh-row");
     let visibleCount = 0;
@@ -158,12 +138,82 @@ function _wireSearch() {
       if (matches) visibleCount += 1;
     });
 
-    if (resultCount) {
-      resultCount.textContent = `${visibleCount} booking${visibleCount === 1 ? "" : "s"}`;
+    if (badge) {
+      badge.textContent = `${visibleCount} of ${total} booking${total === 1 ? "" : "s"}`;
     }
-    if (noResults) {
-      noResults.classList.toggle("hidden", visibleCount > 0 || rows.length === 0);
+    if (emptyState) {
+      // Only show the "no bookings yet" empty state when there were never
+      // any rows to begin with — a search with zero matches should just
+      // show zero rows, not the "no history yet" illustration.
+      emptyState.classList.toggle("hidden", total > 0);
     }
+  };
+
+  input.addEventListener("input", handler);
+  handler();
+}
+
+// ─────────────────────────────────────────────────────
+// Delete wiring
+// ─────────────────────────────────────────────────────
+
+/**
+ * Delegated click handler for the "Delete" button on each row.
+ * Uses an in-place two-tap confirm (button text flips to "Confirm?"
+ * for ~3s, reverts if not tapped again) instead of window.confirm(),
+ * to match the rest of the UI's destructive-action pattern.
+ *
+ * @param {Map<string, Object>} rowsById - normalized row lookup by id
+ * @param {Function} onDelete - (row) => Promise<boolean>
+ */
+function _wireDeleteButtons(rowsById, onDelete) {
+  const tbody = document.getElementById("history-container");
+  if (!tbody || typeof onDelete !== "function") return;
+
+  const pendingConfirm = new Set();
+
+  tbody.addEventListener("click", async (e) => {
+    const btn = e.target.closest('[data-action="delete-booking"]');
+    if (!btn) return;
+
+    const id = btn.dataset.bookingId;
+    const row = rowsById.get(id);
+    if (!row) return;
+
+    if (!pendingConfirm.has(id)) {
+      pendingConfirm.add(id);
+      btn.textContent = "Confirm?";
+      btn.classList.add("bg-red-700", "border-red-500", "text-white");
+      setTimeout(() => {
+        if (pendingConfirm.has(id)) {
+          pendingConfirm.delete(id);
+          btn.textContent = "Delete";
+          btn.classList.remove("bg-red-700", "border-red-500", "text-white");
+        }
+      }, 3000);
+      return;
+    }
+
+    pendingConfirm.delete(id);
+    btn.disabled = true;
+    btn.textContent = "…";
+
+    const success = await onDelete(row);
+    if (!success) {
+      btn.disabled = false;
+      btn.textContent = "Delete";
+      return;
+    }
+
+    const tr = btn.closest("tr");
+    tr?.remove();
+
+    const badge = document.getElementById("history-total-badge");
+    const remaining = document.querySelectorAll(".bh-row").length;
+    if (badge) badge.textContent = `${remaining} booking${remaining === 1 ? "" : "s"}`;
+
+    const emptyState = document.getElementById("history-empty-state");
+    if (emptyState) emptyState.classList.toggle("hidden", remaining > 0);
   });
 }
 
@@ -172,13 +222,19 @@ function _wireSearch() {
 // ─────────────────────────────────────────────────────
 
 /**
- * Renders the booking history table (past bookings only) into
- * #history-container and wires up the live search filter.
+ * Renders the booking history rows (past bookings only) into the
+ * #history-container <tbody> and wires up the live search filter
+ * against #history-search-input.
  *
  * @param {Array<Object>} bookings - Raw bookings from fetchBookings().
  *   Only records with is_active === false are shown.
+ * @param {{ onDelete?: (row: Object) => Promise<boolean> }} [callbacks]
+ *   onDelete is called with the normalized row ({ id, guest_name,
+ *   room_name, ... }) after the second confirm tap, and should resolve
+ *   true on success (removes the row from the table) or false on
+ *   failure (reverts the button so the user can retry).
  */
-export function renderBookingHistory(bookings) {
+export function renderBookingHistory(bookings, { onDelete } = {}) {
   const container = document.getElementById("history-container");
   if (!container) {
     console.error("[BookingHistory] #history-container not found in DOM.");
@@ -188,9 +244,18 @@ export function renderBookingHistory(bookings) {
   const pastBookings = (Array.isArray(bookings) ? bookings : [])
     .filter((b) => !b.is_active)
     .map(_normalizeBooking)
-    .sort((a, b) => new Date(b.date ?? 0) - new Date(a.date ?? 0));
+    .sort((a, b) => new Date(b.sort_date ?? 0) - new Date(a.sort_date ?? 0));
 
-  container.innerHTML = _buildToolbarHTML(pastBookings.length) + _buildTableHTML(pastBookings);
+  // #history-container is a <tbody> — it may only contain <tr> elements,
+  // so we write the row markup directly rather than wrapping it in any
+  // toolbar/table markup (the table + thead already exist in index.html).
+  container.innerHTML = pastBookings.map(_buildRowHTML).join("");
 
-  _wireSearch();
+  const emptyState = document.getElementById("history-empty-state");
+  if (emptyState) emptyState.classList.toggle("hidden", pastBookings.length > 0);
+
+  _wireSearch(pastBookings.length);
+
+  const rowsById = new Map(pastBookings.map((r) => [String(r.id), r]));
+  _wireDeleteButtons(rowsById, onDelete);
 }

@@ -44,6 +44,8 @@ import {
   extendBooking,
   addShopLineItem,
   fetchShopLineItems,
+  deleteBooking,
+  deleteShopLineItems,
   fetchExpenses,
   addExpenseAPI,
   patchExpenseAPI,
@@ -791,6 +793,7 @@ function _onCardClick(room) {
       onAddShop: _handleAddShop,
       onCheckOut: _handleCheckOut,
       onExtendNights: _handleExtendNights,
+      onDeleteBooking: _handleDeleteBooking,
       // Inject the selectors
       getRelatedRooms: (anchor, excluded) => getRelatedRooms(anchor, excluded), 
       getAvailableRooms: (excluded) => getAvailableRooms(excluded)
@@ -993,6 +996,93 @@ async function _handleExtendNights(room, newNights) {
 
   const { rooms } = getState();
   return rooms.find((r) => r.room_name === room.room_name) ?? { ...room, nights: newNights };
+}
+
+// ─────────────────────────────────────────────────────
+// Delete booking handlers
+// ─────────────────────────────────────────────────────
+
+/**
+ * Deletes a booking record plus any shop_line_items tied to it, so
+ * deleting a booking never leaves orphaned shop rows behind. Shared by
+ * both delete entry points (occupied-room checkout panel + Booking
+ * History), which otherwise only differ in how they patch local state
+ * afterwards.
+ *
+ * @param {string} bookingId
+ * @returns {Promise<{ ok: boolean, error?: string }>}
+ */
+async function _deleteBookingAndCleanup(bookingId) {
+  const itemsResult = await fetchShopLineItems({ bookingId });
+  if (itemsResult.ok && itemsResult.items.length > 0) {
+    await deleteShopLineItems(itemsResult.items.map((i) => i.line_item_id));
+  }
+  return deleteBooking(bookingId);
+}
+
+/**
+ * Deletes an ACTIVE/occupied room's booking entirely (as opposed to
+ * checking it out). Called from CheckOutModal's per-room "Delete
+ * booking" button. Flips the room back to "available" locally on
+ * success, with no page refresh needed.
+ *
+ * @param {Object} room
+ * @returns {Promise<boolean>}
+ */
+async function _handleDeleteBooking(room) {
+  const bookingId = room.booking_id;
+  if (!bookingId) {
+    showToast("error", "Cannot delete", "This room has no booking id.");
+    return false;
+  }
+
+  showToast("info", "Deleting booking…", room.room_name);
+  const result = await _deleteBookingAndCleanup(bookingId);
+
+  if (!result.ok) {
+    showToast("error", "Could not delete booking", result.error);
+    return false;
+  }
+
+  patchRoom(room.room_name, {
+    status: "available",
+    booking_id: null,
+    activeBooking: null,
+    guest_name: null,
+    nights: null,
+    charged_rate: null,
+    Client_Booking_Ref: null,
+    amount_paid: 0,
+    payment_status: null,
+    shop_items: [],
+    shop_total: 0
+  });
+
+  showToast("success", "Booking deleted", `${room.room_name} is now available.`);
+  return true;
+}
+
+/**
+ * Deletes a HISTORICAL (already checked-out) booking. Called from
+ * BookingHistory's per-row "Delete" button. Bookings aren't tracked in
+ * state.js — the history table is fetched and rendered fresh each time
+ * (_renderHistoryView()) — so on success this just reports back to
+ * BookingHistory.js, which removes the row itself; there's no state
+ * patch needed here.
+ *
+ * @param {Object} bookingRow - the normalized row from BookingHistory.js ({ id, guest_name, room_name, ... })
+ * @returns {Promise<boolean>}
+ */
+async function _handleDeleteHistoryBooking(bookingRow) {
+  const result = await _deleteBookingAndCleanup(bookingRow.id);
+
+  if (!result.ok) {
+    showToast("error", "Could not delete booking", result.error);
+    return false;
+  }
+
+  showToast("success", "Booking deleted", `${bookingRow.guest_name} — ${bookingRow.room_name}`);
+  return true;
 }
 
 // ─────────────────────────────────────────────────────
@@ -1313,16 +1403,19 @@ async function _renderHistoryView() {
   const container = document.getElementById("history-container");
   if (!container) return;
 
-  container.innerHTML = '<p class="text-gray-500 text-center py-10">Loading history...</p>';
+  // NOTE: #history-container is a <tbody> — it can only legally contain
+  // <tr> elements, so loading/error states must be a <tr><td> here too,
+  // not a bare <p> (that gets silently stripped by the browser's parser).
+  container.innerHTML = '<tr><td colspan="7" class="text-gray-500 text-center py-10">Loading history...</td></tr>';
 
   // Reuse the existing fetchBookings API call
   const result = await fetchBookings();
 
   if (result.ok) {
     // Pass the raw bookings array to the component
-    renderBookingHistory(result.bookings);
+    renderBookingHistory(result.bookings, { onDelete: _handleDeleteHistoryBooking });
   } else {
-    container.innerHTML = '<p class="text-red-500 text-center py-10">Failed to load history.</p>';
+    container.innerHTML = '<tr><td colspan="7" class="text-red-500 text-center py-10">Failed to load history.</td></tr>';
   }
 }
 

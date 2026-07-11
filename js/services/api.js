@@ -454,19 +454,115 @@ export async function addShopLineItem(payload) {
 }
 
 /**
- * Fetches every shop line-item row.
+ * Fetches shop line-item rows. With no arguments, fetches every row
+ * (existing behavior, used by main.js's _loadRooms). Pass `bookingId`
+ * to scope the fetch to a single booking — used by the booking-delete
+ * cleanup flow so it doesn't have to pull the whole table just to find
+ * the handful of rows tied to one booking.
  *
+ * @param {{ bookingId?: string }} [opts]
  * @returns {Promise<{ ok: boolean, items?: Object[], error?: string }>}
  */
-export async function fetchShopLineItems() {
+export async function fetchShopLineItems({ bookingId } = {}) {
   try {
-    const response = await fetch(`${AIRTABLE_URL}/shop_line_items`, { method: "GET", headers: getHeaders() });
+    const url = bookingId
+      ? `${AIRTABLE_URL}/shop_line_items?filterByFormula=${encodeURIComponent(`{booking_id} = "${bookingId}"`)}`
+      : `${AIRTABLE_URL}/shop_line_items`;
+    const response = await fetch(url, { method: "GET", headers: getHeaders() });
     if (!response.ok) return _handleError(`HTTP ${response.status}: ${response.statusText}`);
     const data = await response.json();
     return { ok: true, items: data.records.map((r) => ({ line_item_id: r.id, ...r.fields })) };
   } catch (err) {
     return _handleError(err);
   }
+}
+
+// ─────────────────────────────────────────────────────
+// DELETE BOOKING (+ its shop_line_items)
+// ─────────────────────────────────────────────────────
+//
+// Backs the "Delete booking" action from both the occupied-room
+// checkout panel and the Booking History table. Deleting the booking
+// record on its own would leave orphaned shop_line_items rows behind
+// (they link to a booking_id that no longer exists), so callers pair
+// this with deleteShopLineItems() — see _deleteBookingAndCleanup() in
+// main.js.
+
+/**
+ * Deletes a single booking record.
+ *
+ * @param {string} airtableId - the booking's Airtable record id
+ * @returns {Promise<{ ok: boolean, error?: string }>}
+ */
+export async function deleteBooking(airtableId) {
+  try {
+    const response = await fetch(`${AIRTABLE_URL}/bookings/${airtableId}`, {
+      method: "DELETE",
+      headers: getHeaders()
+    });
+    if (!response.ok) return _handleError(`HTTP ${response.status}: ${response.statusText}`, response);
+    return { ok: true };
+  } catch (err) {
+    return _handleError(err);
+  }
+}
+
+/**
+ * Deletes shop_line_items rows by id, batched into groups of
+ * AIRTABLE_BATCH_LIMIT (Airtable's batch-delete endpoint accepts up to
+ * 10 ids per request, passed as repeated `records[]` query params).
+ *
+ * @param {string[]} lineItemIds
+ * @returns {Promise<{
+ *   ok: boolean,
+ *   deleted_ids: string[],
+ *   partial?: boolean,
+ *   failedBatches?: Object[],   // [{ batchIndex, ids, error }]
+ *   error?: string
+ * }>}
+ */
+export async function deleteShopLineItems(lineItemIds) {
+  if (!Array.isArray(lineItemIds) || lineItemIds.length === 0) {
+    return { ok: true, deleted_ids: [] };
+  }
+
+  const batches = _chunk(lineItemIds, AIRTABLE_BATCH_LIMIT);
+  const deletedIds = [];
+  const failedBatches = [];
+
+  for (let i = 0; i < batches.length; i++) {
+    const batch = batches[i];
+    const query = batch.map((id) => `records[]=${encodeURIComponent(id)}`).join("&");
+
+    try {
+      const response = await fetch(`${AIRTABLE_URL}/shop_line_items?${query}`, {
+        method: "DELETE",
+        headers: getHeaders()
+      });
+
+      if (!response.ok) {
+        const errResult = await _handleError(`HTTP ${response.status}: batch ${i + 1} failed`, response);
+        failedBatches.push({ batchIndex: i, ids: batch, error: errResult.error });
+        continue; // One bad batch shouldn't sink deletes in the other batches.
+      }
+
+      const data = await response.json();
+      (data.records ?? []).forEach((r) => deletedIds.push(r.id));
+    } catch (err) {
+      const errResult = await _handleError(err);
+      failedBatches.push({ batchIndex: i, ids: batch, error: errResult.error });
+    }
+  }
+
+  if (failedBatches.length === 0) {
+    return { ok: true, deleted_ids: deletedIds };
+  }
+
+  if (deletedIds.length === 0) {
+    return { ok: false, deleted_ids: [], error: "All batches failed.", failedBatches };
+  }
+
+  return { ok: true, partial: true, deleted_ids: deletedIds, failedBatches };
 }
 
 // --- ADD THESE EXPENSE FUNCTIONS TO api.js ---

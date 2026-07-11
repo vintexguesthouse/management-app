@@ -465,14 +465,26 @@
 
           <!-- BOOKING HISTORY VIEW (hidden until tab is clicked) -->
           <div id="view-history" class="hidden">
-            <div class="flex items-center justify-between mb-4">
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
               <h2 class="text-base font-semibold text-white">
                 Booking History
                 <span id="history-scope-label" class="text-xs font-normal text-gray-500 ml-2"></span>
               </h2>
-              <div
-                id="history-total-badge"
-                class="text-xs font-mono font-semibold text-brand-300 bg-brand-900/20 border border-brand-800/30 rounded-full px-3 py-1"></div>
+              <div class="flex items-center gap-3">
+                <div class="relative w-full sm:w-64">
+                  <svg class="w-4 h-4 text-gray-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
+                    fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                      d="M21 21l-4.35-4.35M11 19a8 8 0 100-16 8 8 0 000 16z" />
+                  </svg>
+                  <input id="history-search-input" type="text" placeholder="Search by guest or room…"
+                    class="w-full bg-gray-800 border border-gray-700 rounded-lg pl-9 pr-3 py-2 text-sm text-white
+                           placeholder-gray-600 focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500 transition-colors" />
+                </div>
+                <div
+                  id="history-total-badge"
+                  class="text-xs font-mono font-semibold text-brand-300 bg-brand-900/20 border border-brand-800/30 rounded-full px-3 py-1 whitespace-nowrap"></div>
+              </div>
             </div>
 
             <!-- Glassmorphism wrapper for the history table -->
@@ -507,10 +519,13 @@
                         class="px-5 py-3 text-xs font-semibold uppercase tracking-wider text-gray-500 whitespace-nowrap text-right">
                         Status
                       </th>
+                      <th
+                        class="px-5 py-3 text-xs font-semibold uppercase tracking-wider text-gray-500 whitespace-nowrap text-right">
+                      </th>
                     </tr>
                   </thead>
                   <tbody id="history-container" class="divide-y divide-gray-800">
-                    <!-- Booking history rows injected by main.js renderHistory() -->
+                    <!-- Booking history rows injected by BookingHistory.js — must be <tr> only, this is a <tbody> -->
                   </tbody>
                 </table>
               </div>

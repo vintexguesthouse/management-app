@@ -70,6 +70,8 @@ let _onAddShopCallback = null; // (room, { item_name, item_price, quantity }) =>
 let _onCheckOutCallback = null; // ({ rooms, payment_method, payment_reference }) => void
 let _onExtendNightsCallback = null; // (room, newNights) => Promise<Object> — resolves to the updated room
 let _getRelatedRoomsCallback = null; // (anchor, excludedRoomNames) => Object[]
+let _onDeleteBookingCallback = null; // (room) => Promise<boolean>
+let _pendingDeleteConfirm = new Set(); // room_name(s) currently in the "Confirm delete?" state
 
 // ─────────────────────────────────────────────────────
 // Internal helpers
@@ -192,6 +194,16 @@ function _buildRoomBlock(room) {
             : ""
         }
       </div>
+
+      <button type="button" data-action="delete-booking" data-room="${room.room_name}"
+        class="delete-booking-btn text-[10px] px-2 py-1 rounded-md border transition-colors font-medium
+               ${
+                 _pendingDeleteConfirm.has(room.room_name)
+                   ? "bg-red-700 border-red-500 text-white"
+                   : "bg-gray-800 hover:bg-red-900/60 text-gray-500 hover:text-red-400 border-gray-700 hover:border-red-700"
+               }">
+        ${_pendingDeleteConfirm.has(room.room_name) ? "Confirm delete?" : "Delete booking"}
+      </button>
 
       <div class="flex justify-between items-center gap-2">
         <span class="text-xs text-gray-500">Nights</span>
@@ -455,6 +467,12 @@ function _wireRoomsSection() {
  * including ones added after the modal first opened.
  */
 function _onRoomsListClick(e) {
+  const deleteBtn = e.target.closest('[data-action="delete-booking"]');
+  if (deleteBtn) {
+    _handleDeleteBookingClick(deleteBtn);
+    return;
+  }
+
   const extendBtn = e.target.closest('[data-action="extend-nights"]');
   if (extendBtn) {
     _handleExtendNightsClick(extendBtn);
@@ -533,6 +551,53 @@ async function _handleExtendNightsClick(triggerBtn) {
     triggerBtn.disabled = false;
     triggerBtn.textContent = "Update";
   }
+}
+
+/**
+ * Handles a click on a room's "Delete booking" button — an in-place
+ * two-tap confirm (button text flips to "Confirm delete?" for ~3s,
+ * reverts if not tapped again), matching the destructive-action
+ * pattern used elsewhere instead of a native window.confirm() popup.
+ * @param {HTMLElement} btn
+ */
+async function _handleDeleteBookingClick(btn) {
+  const roomName = btn.dataset.room;
+  const room = _activeGroup.find((r) => r.room_name === roomName);
+  if (!room) return;
+
+  if (!_pendingDeleteConfirm.has(roomName)) {
+    _pendingDeleteConfirm.add(roomName);
+    btn.textContent = "Confirm delete?";
+    btn.classList.add("bg-red-700", "border-red-500", "text-white");
+    setTimeout(() => {
+      if (_pendingDeleteConfirm.has(roomName)) {
+        _pendingDeleteConfirm.delete(roomName);
+        btn.textContent = "Delete booking";
+        btn.classList.remove("bg-red-700", "border-red-500", "text-white");
+      }
+    }, 3000);
+    return;
+  }
+
+  _pendingDeleteConfirm.delete(roomName);
+  btn.disabled = true;
+  btn.textContent = "Deleting…";
+
+  const success = await _onDeleteBookingCallback?.(room);
+  if (!success) {
+    btn.disabled = false;
+    btn.textContent = "Delete booking";
+    return;
+  }
+
+  _activeGroup = _activeGroup.filter((r) => r.room_name !== roomName);
+
+  if (_activeGroup.length === 0) {
+    closeModal();
+    return;
+  }
+
+  _refreshRoomsSection();
 }
 
 /**
@@ -622,10 +687,15 @@ function _wireCheckOutPanel() {
  *     // main.js owns state.js, so it decides the matching rule
  *     // (getRelatedRooms() requires same Client_Booking_Ref AND same
  *     // guest_name, minus rooms already in the group).
+ *   onDeleteBooking: (room) => Promise<boolean>,
+ *     // Permanently deletes a room's booking (and its shop_line_items)
+ *     // instead of checking it out. Resolves true on success, in which
+ *     // case the room is dropped from _activeGroup (closing the modal
+ *     // if it was the last one left).
  * }} callbacks
  */
 export function openModal(room, callbacks) {
-  const { onAddShop, onCheckOut, onExtendNights, getRelatedRooms } = callbacks;
+  const { onAddShop, onCheckOut, onExtendNights, getRelatedRooms, onDeleteBooking } = callbacks;
 
   const modal = document.getElementById("checkout-modal");
   const overlay = document.getElementById("modal-overlay");
@@ -645,6 +715,8 @@ export function openModal(room, callbacks) {
   _onCheckOutCallback = onCheckOut;
   _onExtendNightsCallback = typeof onExtendNights === "function" ? onExtendNights : null;
   _getRelatedRoomsCallback = typeof getRelatedRooms === "function" ? getRelatedRooms : () => [];
+  _onDeleteBookingCallback = typeof onDeleteBooking === "function" ? onDeleteBooking : null;
+  _pendingDeleteConfirm = new Set();
 
   // Inject HTML
   modal.innerHTML = _buildCheckOutPanel();
@@ -695,6 +767,8 @@ export function closeModal() {
   _onCheckOutCallback = null;
   _onExtendNightsCallback = null;
   _getRelatedRoomsCallback = null;
+  _onDeleteBookingCallback = null;
+  _pendingDeleteConfirm = new Set();
 }
 
 /**
