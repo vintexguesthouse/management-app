@@ -31,7 +31,11 @@ import {
   renderPaymentFields,
   validatePayment,
   PAYMENT_METHOD_SELECT_ID,
-  PAYMENT_REFERENCE_INPUT_ID
+  PAYMENT_REFERENCE_INPUT_ID,
+  renderPaymentStatusFields,
+  validatePaymentStatus,
+  PAYMENT_STATUS_SELECT_ID,
+  PAYMENT_DEPOSIT_INPUT_ID
 } from "./payments.js";
 
 // ─────────────────────────────────────────────────────
@@ -298,6 +302,7 @@ function _buildCheckInForm() {
         <p class="text-xs font-semibold text-gray-500 uppercase tracking-widest mb-2">
           ${isGroup ? "Group Payment" : "Payment"}
         </p>
+        <div id="ci-payment-status-fields" class="mb-4"></div>
         <div id="ci-payment-fields"></div>
       </div>
 
@@ -493,10 +498,14 @@ function _wireCheckInForm() {
   // 3. Add-room dropdown (rebuilt each refresh, so wire it fresh here too)
   _wireAddRoomRow();
 
-  // 4. Group payment fields (method + conditional reference)
+  // 4. Group payment fields (method + conditional reference, status + conditional deposit)
   renderPaymentFields("ci-payment-fields", "cash");
+  renderPaymentStatusFields("ci-payment-status-fields", "paid");
   paymentFieldsContainer.addEventListener("input", () => validationMsg.classList.add("hidden"));
   paymentFieldsContainer.addEventListener("change", () => validationMsg.classList.add("hidden"));
+  const paymentStatusContainer = document.getElementById("ci-payment-status-fields");
+  paymentStatusContainer.addEventListener("input", () => validationMsg.classList.add("hidden"));
+  paymentStatusContainer.addEventListener("payment-status-change", () => validationMsg.classList.add("hidden"));
 
   // 5. Final Save
   saveBtn.addEventListener("click", () => {
@@ -507,6 +516,10 @@ function _wireCheckInForm() {
     const referenceInput = document.getElementById(PAYMENT_REFERENCE_INPUT_ID);
     const reference = referenceInput ? referenceInput.value.trim() : "";
 
+    const paymentStatus = document.getElementById(PAYMENT_STATUS_SELECT_ID)?.value ?? "paid";
+    const depositInput = document.getElementById(PAYMENT_DEPOSIT_INPUT_ID);
+    const depositAmount = depositInput ? Number(depositInput.value) : 0;
+
     const { valid, message } = validatePayment(paymentMethod, reference);
     if (!valid) {
       validationMsg.textContent = message;
@@ -514,6 +527,24 @@ function _wireCheckInForm() {
       referenceInput?.focus();
       return;
     }
+
+    // Compute each room's grand_total up front so both the deposit
+    // validation and the proportional split below use the exact same
+    // numbers — grand_total = charged_rate × nights per room.
+    const preliminaryRooms = _activeGroup.map((room) => {
+      const chargedRate = Number(_rateSelections[room.room_name] ?? room.base_rate);
+      return { room_name: room.room_name, grand_total: chargedRate * nights };
+    });
+    const groupGrandTotal = preliminaryRooms.reduce((sum, r) => sum + r.grand_total, 0);
+
+    const statusCheck = validatePaymentStatus(paymentStatus, depositAmount, groupGrandTotal);
+    if (!statusCheck.valid) {
+      validationMsg.textContent = statusCheck.message;
+      validationMsg.classList.remove("hidden");
+      depositInput?.focus();
+      return;
+    }
+
     validationMsg.classList.add("hidden");
 
     // One Client_Booking_Ref per group, generated here and stamped onto
@@ -532,6 +563,16 @@ function _wireCheckInForm() {
       const roomType = _roomTypeSelections[room.room_name] ?? room.room_type;
       const chargedRate = Number(_rateSelections[room.room_name] ?? room.base_rate);
       const baseRate = Number(room.base_rate);
+      const grandTotal = chargedRate * nights;
+
+      // Allocate a partial deposit across rooms proportionally by each
+      // room's own grand_total share of the group total.
+      const amountPaid =
+        paymentStatus === "paid"
+          ? grandTotal
+          : paymentStatus === "unpaid"
+            ? 0
+            : Math.round((depositAmount * grandTotal) / groupGrandTotal);
 
       return {
         room_name: room.room_name,
@@ -541,8 +582,10 @@ function _wireCheckInForm() {
         base_rate: baseRate,
         charged_rate: chargedRate,
         rate_variance: chargedRate - baseRate,
-        grand_total: chargedRate * nights,
-        Client_Booking_Ref: clientBookingRef
+        grand_total: grandTotal,
+        Client_Booking_Ref: clientBookingRef,
+        payment_status: paymentStatus,
+        amount_paid: amountPaid
       };
     });
 

@@ -41,7 +41,9 @@ import {
   fetchBookings,
   bulkCheckIn,
   bulkCheckOut,
-  addShopItem,
+  extendBooking,
+  addShopLineItem,
+  fetchShopLineItems,
   fetchExpenses,
   addExpenseAPI,
   patchExpenseAPI,
@@ -331,10 +333,21 @@ function _wireRoomFilterBar() {
 // Room data loading & reconciliation
 // ─────────────────────────────────────────────────────
 
-function _mergeData(rooms, bookings) {
+function _mergeData(rooms, bookings, shopLineItems) {
   const roomsByName = new Map((rooms ?? []).map((r) => [r.room_name, r]));
   const activeBookingsByRoom = new Map();
   (bookings ?? []).filter((b) => b.is_active === true).forEach((b) => activeBookingsByRoom.set(b.room_name, b));
+
+  // Group shop line items by the booking_id they belong to, so each
+  // occupied room can look up its own items in O(1) instead of
+  // filtering the whole line-items array per room.
+  const lineItemsByBooking = new Map();
+  (shopLineItems ?? []).forEach((item) => {
+    const key = item.booking_id;
+    if (!key) return;
+    if (!lineItemsByBooking.has(key)) lineItemsByBooking.set(key, []);
+    lineItemsByBooking.get(key).push(item);
+  });
 
   const { rooms: currentState } = getState();
 
@@ -348,6 +361,10 @@ function _mergeData(rooms, bookings) {
     }
 
     if (activeBooking) {
+      const itemsForRoom = lineItemsByBooking.get(activeBooking.airtable_id) ?? [];
+      const shopItems = itemsForRoom.map((i) => ({ name: i.item_name, qty: i.qty, unit_price: i.unit_price }));
+      const shopTotal = itemsForRoom.reduce((s, i) => s + Number(i.qty ?? 0) * Number(i.unit_price ?? 0), 0);
+
       return {
         ...def,
         ...(liveRoom ?? {}),
@@ -357,9 +374,10 @@ function _mergeData(rooms, bookings) {
         nights: Number(activeBooking.nights || 1),
         charged_rate: Number(activeBooking.charged_rate || def.base_rate),
         payment_status: activeBooking.payment_status || "unpaid",
+        amount_paid: Number(activeBooking.amount_paid || 0),
         check_in: activeBooking.check_in || activeBooking.created_at || new Date().toISOString(),
-        shop_total: Number(activeBooking.shop_charge || 0),
-        shop_items: Array.isArray(local?.shop_items) ? local.shop_items : [],
+        shop_total: shopTotal,
+        shop_items: shopItems,
         // Top-level, not just nested in activeBooking — getRelatedRooms()
         // in state.js filters on room.Client_Booking_Ref directly, so it
         // has to live here or every sibling lookup silently returns [].
@@ -378,6 +396,7 @@ function _mergeData(rooms, bookings) {
       shop_items: [],
       nights: null,
       payment_status: null,
+      amount_paid: null,
       activeBooking: null,
       ...def
     };
@@ -386,21 +405,33 @@ function _mergeData(rooms, bookings) {
 
 async function _loadRooms() {
   setState({ ui: { ...getState().ui, loading: true } }, "loadRooms");
-  const [roomsResult, bookingsResult] = await Promise.all([fetchRooms(), fetchBookings()]);
+  const [roomsResult, bookingsResult, shopLineItemsResult] = await Promise.all([
+    fetchRooms(),
+    fetchBookings(),
+    fetchShopLineItems()
+  ]);
 
   if (!roomsResult.ok) {
-    setRooms(_mergeData([], []));
+    setRooms(_mergeData([], [], []));
     showToast("error", "Sync failed", roomsResult.error ?? "Could not reach the server.");
     return;
   }
 
   if (!bookingsResult.ok) {
-    setRooms(_mergeData(roomsResult.rooms, []));
+    setRooms(_mergeData(roomsResult.rooms, [], []));
     showToast("error", "Bookings sync failed", bookingsResult.error ?? "Could not reach the server.");
     return;
   }
 
-  setRooms(_mergeData(roomsResult.rooms, bookingsResult.bookings));
+  if (!shopLineItemsResult.ok) {
+    // Shop line items are supplementary — don't block the room grid on
+    // them, but do surface that shop totals may be stale this cycle.
+    setRooms(_mergeData(roomsResult.rooms, bookingsResult.bookings, []));
+    showToast("error", "Shop items sync failed", shopLineItemsResult.error ?? "Could not reach the server.");
+    return;
+  }
+
+  setRooms(_mergeData(roomsResult.rooms, bookingsResult.bookings, shopLineItemsResult.items));
 }
 
 // ─────────────────────────────────────────────────────
@@ -759,6 +790,7 @@ function _onCardClick(room) {
     openCheckOutModal(room, {
       onAddShop: _handleAddShop,
       onCheckOut: _handleCheckOut,
+      onExtendNights: _handleExtendNights,
       // Inject the selectors
       getRelatedRooms: (anchor, excluded) => getRelatedRooms(anchor, excluded), 
       getAvailableRooms: (excluded) => getAvailableRooms(excluded)
@@ -782,9 +814,9 @@ async function _handleCheckIn(groupFormData) {
   const created_by = getActiveUser() ?? "unknown";
   const isGroup = roomsData.length > 1;
 
-  // Payment is captured once, upfront, for the whole group via payments.js —
-  // treat it as settled at check-in time.
-  const paymentStatus = "paid";
+  // Payment status/amount now come from CheckInModal.js per room (paid
+  // in full / partial deposit / pay-at-checkout) instead of being
+  // hardcoded — see payments.js's renderPaymentStatusFields().
   const checkInTimestamp = new Date().toISOString();
 
   setSyncStatus("saving");
@@ -793,6 +825,8 @@ async function _handleCheckIn(groupFormData) {
   // atomic state emit (one grid re-render, not one per room).
   const optimisticPatches = {};
   roomsData.forEach((formData) => {
+    const paymentStatus = formData.payment_status ?? "paid";
+    const amountPaid = Number(formData.amount_paid ?? 0);
     optimisticPatches[formData.room_name] = {
       status: "occupied",
       error: null,
@@ -801,6 +835,7 @@ async function _handleCheckIn(groupFormData) {
       room_type: formData.room_type,
       charged_rate: formData.charged_rate,
       payment_status: paymentStatus,
+      amount_paid: amountPaid,
       payment_method,
       payment_reference,
       check_in: checkInTimestamp,
@@ -817,6 +852,7 @@ async function _handleCheckIn(groupFormData) {
         room_type: formData.room_type,
         charged_rate: formData.charged_rate,
         payment_status: paymentStatus,
+        amount_paid: amountPaid,
         payment_method,
         payment_reference,
         check_in: checkInTimestamp,
@@ -853,7 +889,8 @@ async function _handleCheckIn(groupFormData) {
     base_rate: Number(formData.base_rate),
     charged_rate: Number(formData.charged_rate),
     shop_charge: 0,
-    payment_status: paymentStatus,
+    payment_status: formData.payment_status ?? "paid",
+    amount_paid: Number(formData.amount_paid ?? 0),
     payment_method,
     payment_reference,
     is_active: true,
@@ -932,55 +969,73 @@ async function _handleCheckIn(groupFormData) {
 }
 
 // ─────────────────────────────────────────────────────
+// Extend Stay handler
+// ─────────────────────────────────────────────────────
+
+/**
+ * Handles the "Update" (Extend Stay) action from CheckOutModal.js.
+ * PATCHes the new nights value straight to Airtable, then patches
+ * local state so the grid/receipt/other open views stay consistent.
+ *
+ * @param {Object} room
+ * @param {number} newNights
+ * @returns {Promise<Object|null>} the updated room, or null on failure
+ */
+async function _handleExtendNights(room, newNights) {
+  if (!room?.booking_id) return null;
+
+  const result = await extendBooking(room.booking_id, newNights);
+  if (!result.ok) {
+    throw new Error(result.error ?? "Could not extend stay.");
+  }
+
+  patchRoom(room.room_name, { nights: newNights });
+
+  const { rooms } = getState();
+  return rooms.find((r) => r.room_name === room.room_name) ?? { ...room, nights: newNights };
+}
+
+// ─────────────────────────────────────────────────────
 // Shop item handler
 // ─────────────────────────────────────────────────────
 
 /**
- * Shop item handler (Group-Aware)
+ * Shop item handler (Group-Aware, line-item backed)
  * Called by CheckOutModal.js when an item is added to a specific room.
+ * Each "Add" click becomes its own row in shop_line_items — no more
+ * client-computed running total PATCHed onto the booking record, which
+ * used to lose updates when two "Add" clicks landed close together.
  */
 async function _handleAddShop(room, { item_name, item_price, quantity }) {
-  // 1. Guard: Ensure we have a target room
   if (!room) return;
-
   showToast("info", "Adding item…", `${quantity}× ${item_name}`);
 
-  // 2. Calculate local changes
-  const lineTotal = item_price * quantity;
-  const prevShopTotal = Number(room.shop_total ?? 0);
-  const newShopTotal = prevShopTotal + lineTotal;
-
-  // 3. API Call: Update the specific room's record via its booking_id
-  const result = await addShopItem(room.booking_id, {
-    new_shop_total: newShopTotal
+  const result = await addShopLineItem({
+    booking_id: room.booking_id,
+    Client_Booking_Ref: room.Client_Booking_Ref ?? null,
+    item_name,
+    qty: quantity,
+    unit_price: item_price,
+    created_by: getActiveUser() ?? "unknown",
+    created_at: new Date().toISOString()
   });
 
-  if (result.ok) {
-    // 4. Update Global State: Patch the specific room
-    const prevItems = Array.isArray(room.shop_items) ? room.shop_items : [];
-    const existingIdx = prevItems.findIndex((i) => i.name === item_name);
-    
-    const updatedItems = existingIdx >= 0
-      ? prevItems.map((i, idx) => (idx === existingIdx ? { ...i, qty: (i.qty ?? 1) + quantity } : i))
-      : [...prevItems, { name: item_name, unit_price: item_price, qty: quantity }];
-
-    patchRoom(room.room_name, {
-      shop_total: newShopTotal,
-      shop_items: updatedItems
-    });
-
-    // 5. Update Component UI: Fetch the updated state and refresh the modal
-    const { rooms } = getState();
-    const updatedRoom = rooms.find(r => r.room_name === room.room_name);
-    
-    if (updatedRoom) {
-      // refreshRoomTotals is imported from CheckOutModal.js
-      refreshRoomTotals(updatedRoom);
-      showToast("success", "Item added", `${quantity}× ${item_name} — ${_ksh(lineTotal)}`);
-    }
-  } else {
-    // 6. Handle failure
+  if (!result.ok) {
     showToast("error", "Could not add item", result.error);
+    return;
+  }
+
+  const newItem = { name: item_name, unit_price: item_price, qty: quantity };
+  const updatedItems = [...(room.shop_items ?? []), newItem];
+  const updatedTotal = updatedItems.reduce((s, i) => s + i.qty * i.unit_price, 0);
+
+  patchRoom(room.room_name, { shop_items: updatedItems, shop_total: updatedTotal });
+
+  const { rooms } = getState();
+  const updatedRoom = rooms.find((r) => r.room_name === room.room_name);
+  if (updatedRoom) {
+    refreshRoomTotals(updatedRoom);
+    showToast("success", "Item added", `${quantity}× ${item_name} — ${_ksh(item_price * quantity)}`);
   }
 }
 
@@ -991,9 +1046,18 @@ async function _handleAddShop(room, { item_name, item_price, quantity }) {
 async function _handleCheckOut(payload) {
   console.log("Processing Group Checkout:", payload);
 
-  const { rooms: bookingIds, payment_method, payment_reference, payment_status } = payload;
+  const { rooms: roomPayloads, payment_method, payment_reference, payment_status } = payload;
 
-  if (!bookingIds || bookingIds.length === 0) return;
+  if (!roomPayloads || roomPayloads.length === 0) return;
+
+  // CheckOutModal.js now sends rooms as { booking_id, room_name,
+  // balance_due } objects (balance_due = that room's computed
+  // _roomSubtotal() at the moment checkout was submitted), not bare
+  // booking_id strings — bulkCheckOut() itself still just needs the id list.
+  const bookingIds = roomPayloads.map((r) => r.booking_id).filter(Boolean);
+  const totalBalanceCollected = roomPayloads.reduce((sum, r) => sum + Number(r.balance_due ?? 0), 0);
+
+  if (bookingIds.length === 0) return;
 
   showToast("info", `Checking out ${bookingIds.length} room${bookingIds.length !== 1 ? "s" : ""}...`);
   setSyncStatus("saving");
@@ -1007,10 +1071,10 @@ async function _handleCheckOut(payload) {
   // partial-failure visibility check-in has instead of the previous
   // sequential-PATCH-loop bailing on the first failure and leaving
   // already-closed rooms stuck showing 'occupied' in local state.
-  const result = await bulkCheckOut(payload.rooms, {
-    payment_method: payload.payment_method,
-    payment_reference: payload.payment_reference,
-    status: "paid"
+  const result = await bulkCheckOut(bookingIds, {
+    payment_method,
+    payment_reference,
+    payment_status: payment_status ?? "paid"
   });
 
   if (!result.ok) {
@@ -1046,6 +1110,7 @@ async function _handleCheckOut(payload) {
       booking_id: null,
       charged_rate: null,
       payment_status: null,
+      amount_paid: null,
       shop_total: 0,
       shop_items: [],
       nights: null,
@@ -1067,7 +1132,7 @@ async function _handleCheckOut(payload) {
 
   if (failedRoomNames.length === 0) {
     setSyncStatus("synced");
-    showToast("success", "Checked out!", "All rooms are now available.");
+    showToast("success", "Checked out!", `Balance collected: ${_ksh(totalBalanceCollected)}`);
   } else if (succeededIds.length === 0) {
     setSyncStatus("error");
     showToast("error", "Checkout failed", result.error ?? "No rooms were checked out.");

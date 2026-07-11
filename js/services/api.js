@@ -122,6 +122,7 @@ function _sanitizeBookingFields(data, isPatch = false) {
     "payment_status",
     "payment_method",
     "payment_reference",
+    "amount_paid",
     "shop_charge", // Only if you input this manually
     "is_active",
     "created_by"
@@ -226,11 +227,13 @@ export async function bulkCheckIn(recordsArray) {
 // 3. CHECK OUT (PATCH to Airtable)
 export async function checkOut(airtableId, payload) {
   try {
-    // Merge status into the payload before sanitizing
+    // Merge status into the payload before sanitizing. Only default to
+    // "paid" when the caller didn't supply a payment_status — checkout
+    // can now close a booking as unpaid/partial too.
     const dataToSave = {
       ...payload,
       is_active: false,
-      payment_status: "paid"
+      payment_status: payload.payment_status ?? "paid"
     };
 
     const response = await fetch(`${AIRTABLE_URL}/bookings/${airtableId}`, {
@@ -286,7 +289,7 @@ export async function bulkCheckOut(bookingIds, payload) {
   const dataToSave = {
     ...payload,
     is_active: false,
-    payment_status: "paid"
+    payment_status: payload.payment_status ?? "paid"
   };
   const fields = _sanitizeBookingFields(dataToSave, true);
 
@@ -354,7 +357,42 @@ export async function fetchBookings() {
   }
 }
 
+// ─────────────────────────────────────────────────────
+// EXTEND BOOKING (PATCH nights to Airtable)
+// ─────────────────────────────────────────────────────
+//
+// Backs the "Extend Stay" action in CheckOutModal.js — a lightweight,
+// single-field PATCH so nights can be updated mid-checkout without
+// going through the full _sanitizeBookingFields() checkout payload.
+
+/**
+ * Updates the `nights` field on a single booking record.
+ *
+ * @param {string} airtableId - the booking's Airtable record id
+ * @param {number} nights - the new nights value
+ * @returns {Promise<{ ok: boolean, error?: string }>}
+ */
+export async function extendBooking(airtableId, nights) {
+  try {
+    const response = await fetch(`${AIRTABLE_URL}/bookings/${airtableId}`, {
+      method: "PATCH",
+      headers: getHeaders(),
+      body: JSON.stringify({ fields: { nights: Number(nights) } })
+    });
+    if (!response.ok) return _handleError(`HTTP ${response.status}`, response);
+    return { ok: true };
+  } catch (err) {
+    return _handleError(err);
+  }
+}
+
 // 5. ADD SHOP ITEM (PATCH to Airtable)
+// Left in place, UNUSED, as a rollback safety net — the app now writes
+// shop charges as individual rows in the shop_line_items table via
+// addShopLineItem() below instead of PATCHing a running total onto the
+// booking record (that running-total approach was a race condition:
+// two rapid "Add" clicks on the same item could read-then-write the
+// same stale total and silently lose one of the updates).
 export async function addShopItem(airtableId, payload) {
   try {
     // You will need to fetch the existing total first, then PATCH the update
@@ -369,6 +407,63 @@ export async function addShopItem(airtableId, payload) {
     });
     if (!response.ok) return _handleError(`HTTP ${response.status}`, response);
     return { ok: true };
+  } catch (err) {
+    return _handleError(err);
+  }
+}
+
+// ─────────────────────────────────────────────────────
+// SHOP LINE ITEMS (shop_line_items table)
+// ─────────────────────────────────────────────────────
+//
+// Each "Add" click on a shop item now becomes its own row in the
+// shop_line_items table, instead of a client-computed running total
+// PATCHed onto the booking record. This fixes the double-click race:
+// two rapid POSTs land as two independent rows, not two writers racing
+// to update the same shop_charge number.
+
+/**
+ * Creates a single shop line-item row.
+ *
+ * @param {{
+ *   booking_id: string,
+ *   Client_Booking_Ref: string|null,
+ *   item_name: string,
+ *   qty: number,
+ *   unit_price: number,
+ *   created_by: string,
+ *   created_at: string
+ * }} payload
+ * @returns {Promise<{ ok: boolean, line_item_id?: string, error?: string }>}
+ */
+export async function addShopLineItem(payload) {
+  _logPayload("POST /shop_line_items", payload);
+
+  try {
+    const response = await fetch(`${AIRTABLE_URL}/shop_line_items`, {
+      method: "POST",
+      headers: getHeaders(),
+      body: JSON.stringify({ fields: payload })
+    });
+    if (!response.ok) return _handleError(`HTTP ${response.status}`, response);
+    const data = await response.json();
+    return { ok: true, line_item_id: data.id };
+  } catch (err) {
+    return _handleError(err);
+  }
+}
+
+/**
+ * Fetches every shop line-item row.
+ *
+ * @returns {Promise<{ ok: boolean, items?: Object[], error?: string }>}
+ */
+export async function fetchShopLineItems() {
+  try {
+    const response = await fetch(`${AIRTABLE_URL}/shop_line_items`, { method: "GET", headers: getHeaders() });
+    if (!response.ok) return _handleError(`HTTP ${response.status}: ${response.statusText}`);
+    const data = await response.json();
+    return { ok: true, items: data.records.map((r) => ({ line_item_id: r.id, ...r.fields })) };
   } catch (err) {
     return _handleError(err);
   }

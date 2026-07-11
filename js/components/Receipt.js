@@ -58,7 +58,8 @@ function _paymentMethodLabel(method) {
  */
 function _paymentStatusLabel(status) {
   if (status === 'paid') return 'PAID IN FULL';
-  if (status === 'unpaid') return 'UNPAID';
+  if (status === 'partial') return 'PARTIAL PAYMENT — BALANCE DUE';
+  if (status === 'unpaid') return 'UNPAID — PAYMENT DUE';
   return '—';
 }
 
@@ -111,6 +112,12 @@ function _buildConsolidatedReceipt(rooms) {
   const shopTotal = roomList.reduce((sum, r) => sum + Number(r.shop_total ?? 0), 0);
   const grandTotal = grandRoomTotal + shopTotal;
 
+  // 1b. Amount already paid (deposit at check-in, or full amount if
+  // payment_status === "paid") and what's still owed right now.
+  const first0 = roomList[0];
+  const amountPaid = Number(first0.amount_paid ?? first0.activeBooking?.amount_paid ?? 0);
+  const balanceDueNow = Math.max(0, grandTotal - amountPaid);
+
   // 2. Build Room Charges Section
   const roomChargesHTML = roomTotals.map(rt => `
     <div class="rct-row">
@@ -159,25 +166,41 @@ function _buildConsolidatedReceipt(rooms) {
 
   <p class="rct-section-label">Room Charges</p>
   ${roomChargesHTML}
-  <div class="rct-row" style="font-weight:600">
-    <span class="label">Room subtotal</span>
-    <span class="value font-mono">${_ksh(grandRoomTotal)}</span>
-  </div>
 
   <hr class="rct-divider" />
 
   <p class="rct-section-label">Shop / POS</p>
   ${shopItemsHTML}
-  <div class="rct-row" style="font-weight:600;margin-top:3pt">
-    <span class="label">Shop subtotal</span>
-    <span class="value font-mono">${_ksh(shopTotal)}</span>
-  </div>
 
   <hr class="rct-divider-solid" />
 
+  <div class="rct-row" style="font-weight:600">
+    <span class="label">Room subtotal</span>
+    <span class="value font-mono">${_ksh(grandRoomTotal)}</span>
+  </div>
+  <div class="rct-row" style="font-weight:600">
+    <span class="label">Shop subtotal</span>
+    <span class="value font-mono">${_ksh(shopTotal)}</span>
+  </div>
   <div class="rct-total">
-    <span class="tracking-widest">TOTAL DUE</span>
+    <span class="tracking-widest">GRAND TOTAL</span>
     <span class="font-mono">${_ksh(grandTotal)}</span>
+  </div>
+
+  ${
+    amountPaid > 0
+      ? `<div class="rct-row" style="margin-top:4pt">
+           <span class="label">Paid already</span>
+           <span class="value font-mono text-emerald-400">${_ksh(amountPaid)}</span>
+         </div>`
+      : ''
+  }
+
+  <hr class="rct-divider" />
+
+  <div class="rct-total">
+    <span class="tracking-widest">BALANCE DUE NOW</span>
+    <span class="font-mono">${_ksh(balanceDueNow)}</span>
   </div>
 
   <hr class="rct-divider" />

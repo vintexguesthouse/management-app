@@ -68,6 +68,7 @@ let _activeGroup = []; // Object[] — rooms currently in this checkout
 let _anchor = null; // { Client_Booking_Ref, guest_name } — used to find related rooms
 let _onAddShopCallback = null; // (room, { item_name, item_price, quantity }) => void
 let _onCheckOutCallback = null; // ({ rooms, payment_method, payment_reference }) => void
+let _onExtendNightsCallback = null; // (room, newNights) => Promise<Object> — resolves to the updated room
 let _getRelatedRoomsCallback = null; // (anchor, excludedRoomNames) => Object[]
 
 // ─────────────────────────────────────────────────────
@@ -89,11 +90,22 @@ function _activeGroupNames() {
   return _activeGroup.map((r) => r.room_name);
 }
 
-/** Room subtotal: charged_rate × nights, or 0 if the stay is already marked paid. */
+/**
+ * Room subtotal: what's still owed on the room charge for this stay.
+ *   nights      = selected_nights (if the front desk edited it) ?? the
+ *                 booking's nights ?? the room's own nights ?? 1
+ *   roomTotal   = charged_rate (or base_rate as fallback) × nights
+ *   alreadyPaid = amount_paid recorded at check-in (room-level, falling
+ *                 back to the booking-level value)
+ * Never negative — a room that's overpaid (e.g. rate was lowered after
+ * a deposit) shows a zero balance, not a negative one.
+ */
 function _roomSubtotal(room) {
   const booking = room.activeBooking ?? {};
-  if (room.payment_status === "paid") return 0;
-  return (room.charged_rate ?? room.base_rate ?? 0) * (booking.nights ?? room.nights ?? 1);
+  const nights = room.selected_nights ?? booking.nights ?? room.nights ?? 1;
+  const roomTotal = (room.charged_rate ?? room.base_rate ?? 0) * nights;
+  const alreadyPaid = Number(room.amount_paid ?? booking.amount_paid ?? 0);
+  return Math.max(0, roomTotal - alreadyPaid);
 }
 
 function _shopTotal(room) {
@@ -181,13 +193,20 @@ function _buildRoomBlock(room) {
         }
       </div>
 
-      <div class="flex justify-between items-center">
+      <div class="flex justify-between items-center gap-2">
         <span class="text-xs text-gray-500">Nights</span>
-        <input type="number"
-         class="room-nights-input w-12 bg-gray-900 border border-gray-700 rounded px-1 text-right text-xs text-white"
-         data-room-name="${room.room_name}"
-         value="${room.selected_nights ?? booking.nights ?? 1}"
-         min="1" />
+        <div class="flex items-center gap-1.5">
+          <input type="number"
+           class="room-nights-input w-12 bg-gray-900 border border-gray-700 rounded px-1 text-right text-xs text-white"
+           data-room-name="${room.room_name}"
+           value="${room.selected_nights ?? booking.nights ?? 1}"
+           min="1" />
+          <button type="button" data-action="extend-nights" data-room="${room.room_name}"
+            class="text-[10px] px-2 py-1 rounded-md bg-gray-700 hover:bg-brand-700 text-gray-300 hover:text-white
+                   border border-gray-600 hover:border-brand-500 transition-colors font-medium">
+            Update
+          </button>
+        </div>
       </div>
       <div class="flex justify-between">
         <span class="text-xs text-gray-500">Room rate</span>
@@ -396,7 +415,7 @@ function _wireAddRoomRow() {
 
     _activeGroup.push({
       ...room,
-      selected_nights: 1 // Default to 1 night for newly added rooms
+      selected_nights: room.activeBooking?.nights ?? room.nights ?? 1
     });
     _refreshRoomsSection();
   });
@@ -436,6 +455,12 @@ function _wireRoomsSection() {
  * including ones added after the modal first opened.
  */
 function _onRoomsListClick(e) {
+  const extendBtn = e.target.closest('[data-action="extend-nights"]');
+  if (extendBtn) {
+    _handleExtendNightsClick(extendBtn);
+    return;
+  }
+
   const addShopBtn = e.target.closest('[data-action="add-shop"]');
   if (addShopBtn) {
     const roomName = addShopBtn.dataset.room;
@@ -458,6 +483,55 @@ function _onRoomsListClick(e) {
 
     _activeGroup = _activeGroup.filter((r) => r.room_name !== roomName);
     _refreshRoomsSection();
+  }
+}
+
+/**
+ * Handles a click on a room's "Update" (Extend Stay) button. Reads the
+ * new nights value from that room's input, calls the injected
+ * _onExtendNightsCallback, and on success syncs _activeGroup + the
+ * on-screen totals for that room. On failure, shows the error in
+ * #co-validation-msg and reverts the input back to its previous value.
+ * @param {HTMLElement} triggerBtn
+ */
+async function _handleExtendNightsClick(triggerBtn) {
+  const roomName = triggerBtn.dataset.room;
+  const room = _activeGroup.find((r) => r.room_name === roomName);
+  const input = document.querySelector(`.room-nights-input[data-room-name="${roomName}"]`);
+  const validationMsg = document.getElementById("co-validation-msg");
+  if (!room || !input) return;
+
+  const previousValue = room.selected_nights ?? room.activeBooking?.nights ?? room.nights ?? 1;
+  const newNights = parseInt(input.value, 10) || 1;
+
+  if (newNights === previousValue) return; // nothing changed, no need to write
+
+  triggerBtn.disabled = true;
+  triggerBtn.textContent = "…";
+
+  try {
+    const updatedRoom = await _onExtendNightsCallback?.(room, newNights);
+
+    if (!updatedRoom) {
+      throw new Error("Could not extend stay — no response from server.");
+    }
+
+    const idx = _activeGroup.findIndex((r) => r.room_name === roomName);
+    if (idx >= 0) {
+      _activeGroup[idx] = { ...updatedRoom, selected_nights: newNights };
+    }
+
+    validationMsg?.classList.add("hidden");
+    refreshRoomTotals(_activeGroup[idx] ?? updatedRoom);
+  } catch (err) {
+    if (validationMsg) {
+      validationMsg.textContent = err?.message ?? "Could not extend stay. Please try again.";
+      validationMsg.classList.remove("hidden");
+    }
+    input.value = previousValue;
+  } finally {
+    triggerBtn.disabled = false;
+    triggerBtn.textContent = "Update";
   }
 }
 
@@ -512,8 +586,15 @@ function _wireCheckOutPanel() {
     validationMsg.classList.add("hidden");
 
     _onCheckOutCallback?.({
-      // Pass the rooms separately so main.js knows which IDs to patch
-      rooms: _activeGroup.map((room) => room.booking_id),
+      // Pass the rooms as objects (not bare ids) so main.js has each
+      // room's computed balance_due alongside its booking_id — the
+      // running balance the front desk collected at checkout time,
+      // derived from the same _roomSubtotal() the panel displays.
+      rooms: _activeGroup.map((room) => ({
+        booking_id: room.booking_id,
+        room_name: room.room_name,
+        balance_due: _roomSubtotal(room)
+      })),
 
       // Pass the payment details flat, so they can be merged into the PATCH payload
       payment_method: paymentMethod,
@@ -544,7 +625,7 @@ function _wireCheckOutPanel() {
  * }} callbacks
  */
 export function openModal(room, callbacks) {
-  const { onAddShop, onCheckOut, getRelatedRooms } = callbacks;
+  const { onAddShop, onCheckOut, onExtendNights, getRelatedRooms } = callbacks;
 
   const modal = document.getElementById("checkout-modal");
   const overlay = document.getElementById("modal-overlay");
@@ -562,6 +643,7 @@ export function openModal(room, callbacks) {
   };
   _onAddShopCallback = onAddShop;
   _onCheckOutCallback = onCheckOut;
+  _onExtendNightsCallback = typeof onExtendNights === "function" ? onExtendNights : null;
   _getRelatedRoomsCallback = typeof getRelatedRooms === "function" ? getRelatedRooms : () => [];
 
   // Inject HTML
@@ -611,6 +693,7 @@ export function closeModal() {
   _anchor = null;
   _onAddShopCallback = null;
   _onCheckOutCallback = null;
+  _onExtendNightsCallback = null;
   _getRelatedRoomsCallback = null;
 }
 
@@ -626,6 +709,12 @@ export function refreshRoomTotals(updatedRoom) {
   // room) re-renders with the right numbers instead of stale ones.
   const idx = _activeGroup.findIndex((r) => r.room_name === updatedRoom.room_name);
   if (idx >= 0) _activeGroup[idx] = updatedRoom;
+
+  const nightsInputEl = document.querySelector(`.room-nights-input[data-room-name="${updatedRoom.room_name}"]`);
+  if (nightsInputEl) {
+    const nights = updatedRoom.selected_nights ?? updatedRoom.activeBooking?.nights ?? updatedRoom.nights ?? 1;
+    nightsInputEl.value = nights;
+  }
 
   const subtotalEl = document.querySelector(`[data-room-subtotal="${updatedRoom.room_name}"]`);
   if (subtotalEl) subtotalEl.textContent = _ksh(_roomSubtotal(updatedRoom));
