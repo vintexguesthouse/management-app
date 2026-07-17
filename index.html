@@ -186,6 +186,26 @@
             <span>Dashboard</span>
           </button>
 
+          <!-- Reservations (website bookings) -->
+          <button
+            type="button"
+            data-view="reservations"
+            class="nav-link w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors text-gray-400 hover:bg-gray-800 hover:text-white text-left">
+            <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            </svg>
+            <span>Reservations</span>
+            <span
+              id="nav-reservations-badge"
+              class="hidden ml-auto text-[10px] font-bold leading-none px-1.5 py-1 rounded-full bg-brand-600 text-white">
+              0
+            </span>
+          </button>
+
           <!-- Expenses Log -->
           <button
             type="button"
@@ -349,6 +369,28 @@
               </div>
             </div>
           </div>
+
+          <!-- RESERVATIONS VIEW (website bookings — hidden until tab is clicked) -->
+          <div id="view-reservations" class="hidden">
+            <div id="reservations-container">
+              <!-- Reservation cards injected by ReservationsTab.js -->
+            </div>
+
+            <!-- Empty state — toggled by ReservationsTab.js -->
+            <div
+              id="reservations-empty-state"
+              class="hidden flex flex-col items-center justify-center py-16 gap-3 text-center">
+              <svg class="w-10 h-10 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="1.5"
+                  d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              </svg>
+              <p class="text-sm text-gray-600">No reservations yet.</p>
+            </div>
+          </div>
+          <!-- /view-reservations -->
 
           <!-- EXPENSES VIEW (hidden until tab is clicked) -->
           <div id="view-expenses" class="hidden">

@@ -34,6 +34,16 @@
  *    reconciling a bulkCheckIn (or a group checkOut) response updates
  *    every affected room in a single "change" emit instead of one
  *    emit per room.
+ *
+ * v5 changes (website reservations):
+ *  - Added `reservations: []` and `reservationLineItems: []` to the
+ *    root state tree, mirroring the rooms/expenses pattern.
+ *  - Added setReservations(), setReservationLineItems(),
+ *    patchReservationLineItem() mutators.
+ *  - Added getPendingLineItemsCount() (nav badge) and
+ *    getAvailableRoomsByCategory() (feeds ReservationsTab's inline
+ *    room picker, same ignorant-of-state.js callback pattern
+ *    getAvailableRooms/getRelatedRooms already use for the modals).
  */
 
 
@@ -89,13 +99,52 @@ const _state = {
   expenses: [],
 
   /**
+   * reservations: Array of reservation objects (website bookings),
+   * fetched from the `reservations` table.
+   * Each reservation shape (as returned by the API):
+   * {
+   *   airtable_id:   string,
+   *   guest_name:    string,
+   *   guest_phone:   string,
+   *   guest_email:   string | null,
+   *   check_in:      string,          // ISO date string
+   *   check_out:     string,          // ISO date string
+   *   num_guests:    number,
+   *   notes:         string | null,
+   *   status:        string,          // "pending" | "confirmed" | "checked_in" | "cancelled"
+   *   created_at:    string,          // ISO date string
+   *   source:        string,          // "website"
+   * }
+   */
+  reservations: [],
+
+  /**
+   * reservationLineItems: Array of reservation_line_items rows — one
+   * per room category requested within a reservation. Each line item
+   * shape (as returned by the API):
+   * {
+   *   line_item_id:   string,
+   *   reservation_id: string[],       // Airtable link field → [reservation airtable_id]
+   *   category_id:    string,         // matches rooms.category_id
+   *   category_name:  string,
+   *   quantity:       number,
+   *   price_per_night_at_booking: number,
+   *   status:         string,         // "pending" | "checked_in" | "cancelled"
+   *   assigned_room_name:   string | null,
+   *   assigned_booking_id:  string | null,  // bookings-table record id once checked in
+   * }
+   */
+  reservationLineItems: [],
+
+  /**
    * ui: Transient UI flags.
    */
   ui: {
     loading: true,       // Global rooms fetch-in-progress
     expensesLoading: false,
+    reservationsLoading: false,
     modalOpen: false,
-    activeView: 'dashboard',  // 'dashboard' | 'expenses'
+    activeView: 'dashboard',  // 'dashboard' | 'expenses' | 'history' | 'reservations'
     syncStatus: 'synced',
     selectedRooms: [],        // room_name[] currently selected for group check-in
     isMultiSelectMode: false, // true once at least one room has been selected
@@ -110,6 +159,12 @@ const _state = {
    * lastExpensesSync: Timestamp (ms) of the most recent successful expenses pull.
    */
   lastExpensesSync: null,
+
+  /**
+   * lastReservationsSync: Timestamp (ms) of the most recent successful
+   * reservations/line-items API pull.
+   */
+  lastReservationsSync: null,
 };
 
 // ─────────────────────────────────────────────────────
@@ -302,6 +357,21 @@ export function getAvailableRooms(excludeNames = []) {
 }
 
 /**
+ * Available rooms scoped to a single category_id — backs
+ * ReservationsTab's inline "Assign room" picker, which must only
+ * offer rooms matching the line item's category_id (e.g. only
+ * garden-double rooms for a garden-double line item). Same
+ * ignorant-of-state.js callback pattern as getAvailableRooms().
+ *
+ * @param {string} categoryId
+ * @param {string[]} [excludeNames]
+ * @returns {Object[]}
+ */
+export function getAvailableRoomsByCategory(categoryId, excludeNames = []) {
+  return getAvailableRooms(excludeNames).filter((r) => r.category_id === categoryId);
+}
+
+/**
  * Returns rooms that share the same Client_Booking_Ref AND guest_name.
  * This effectively groups rooms for bulk checkout even if they have 
  * different internal booking_ids.
@@ -439,4 +509,57 @@ export function clearSelection() {
     },
     'clearSelection'
   );
+}
+
+// ─────────────────────────────────────────────────────
+// Reservations convenience mutators (website bookings)
+// ─────────────────────────────────────────────────────
+
+/**
+ * Replaces the entire reservations array and marks sync time.
+ * Triggers a "change" event with key "reservations".
+ * @param {Array} reservations
+ */
+export function setReservations(reservations) {
+  setState(
+    {
+      reservations,
+      lastReservationsSync: Date.now(),
+      ui: { ..._state.ui, reservationsLoading: false },
+    },
+    'setReservations'
+  );
+}
+
+/**
+ * Replaces the entire reservationLineItems array.
+ * Triggers a "change" event with key "reservationLineItems".
+ * @param {Array} items
+ */
+export function setReservationLineItems(items) {
+  setState({ reservationLineItems: items }, 'setReservationLineItems');
+}
+
+/**
+ * Merges a patch object into a single reservation line item
+ * identified by line_item_id — e.g. flipping it to 'checked_in' and
+ * recording the room/booking it was assigned to once
+ * patchReservationLineItem() (api.js) confirms the write.
+ * @param {string} lineItemId
+ * @param {Object} patch
+ */
+export function patchReservationLineItem(lineItemId, patch) {
+  const reservationLineItems = _state.reservationLineItems.map((li) =>
+    li.line_item_id === lineItemId ? { ...li, ...patch } : li
+  );
+  setState({ reservationLineItems }, 'patchReservationLineItem');
+}
+
+/**
+ * Count of reservation line items still awaiting a room — backs the
+ * numeric badge on the Reservations nav link.
+ * @returns {number}
+ */
+export function getPendingLineItemsCount() {
+  return _state.reservationLineItems.filter((li) => li.status === 'pending').length;
 }

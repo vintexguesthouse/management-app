@@ -565,6 +565,57 @@ export async function deleteShopLineItems(lineItemIds) {
   return { ok: true, partial: true, deleted_ids: deletedIds, failedBatches };
 }
 
+// ─────────────────────────────────────────────────────
+// RESERVATIONS (website bookings — reservations +
+// reservation_line_items tables)
+// ─────────────────────────────────────────────────────
+//
+// These mirror fetchRooms()/fetchExpenses() exactly. Turning a
+// reservation line item into an actual occupied room is NOT handled
+// here — that reuses the existing checkIn()/bulkCheckIn() above, then
+// calls patchReservationLineItem() below to mark the line item
+// checked_in and record which room/booking it landed on. See
+// main.js's reservation-assignment handler for that orchestration.
+
+// 10. FETCH RESERVATIONS
+export async function fetchReservations() {
+  try {
+    const response = await fetch(`${AIRTABLE_URL}/reservations`, { method: "GET", headers: getHeaders() });
+    if (!response.ok) return _handleError(`HTTP ${response.status}: ${response.statusText}`);
+    const data = await response.json();
+    return { ok: true, reservations: data.records.map((r) => ({ airtable_id: r.id, ...r.fields })) };
+  } catch (err) {
+    return _handleError(err);
+  }
+}
+
+// 11. FETCH RESERVATION LINE ITEMS
+export async function fetchReservationLineItems() {
+  try {
+    const response = await fetch(`${AIRTABLE_URL}/reservation_line_items`, { method: "GET", headers: getHeaders() });
+    if (!response.ok) return _handleError(`HTTP ${response.status}: ${response.statusText}`);
+    const data = await response.json();
+    return { ok: true, items: data.records.map((r) => ({ line_item_id: r.id, ...r.fields })) };
+  } catch (err) {
+    return _handleError(err);
+  }
+}
+
+// 12. PATCH RESERVATION LINE ITEM
+export async function patchReservationLineItem(lineItemId, payload) {
+  try {
+    const response = await fetch(`${AIRTABLE_URL}/reservation_line_items/${lineItemId}`, {
+      method: "PATCH",
+      headers: getHeaders(),
+      body: JSON.stringify({ fields: payload })
+    });
+    if (!response.ok) return _handleError(`HTTP ${response.status}: ${response.statusText}`, response);
+    return { ok: true };
+  } catch (err) {
+    return _handleError(err);
+  }
+}
+
 // --- ADD THESE EXPENSE FUNCTIONS TO api.js ---
 
 // 6. FETCH EXPENSES

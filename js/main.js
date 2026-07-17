@@ -32,13 +32,19 @@ import {
   clearSelection,
   on,
   getAvailableRooms,
-  getRelatedRooms
+  getRelatedRooms,
+  setReservations,
+  setReservationLineItems,
+  patchReservationLineItem as patchReservationLineItemState,
+  getPendingLineItemsCount,
+  getAvailableRoomsByCategory
 } from "./services/state.js";
 
 // ADDED: Added clean Airtable CRUD operations here
 import {
   fetchRooms,
   fetchBookings,
+  checkIn,
   bulkCheckIn,
   bulkCheckOut,
   extendBooking,
@@ -49,12 +55,16 @@ import {
   fetchExpenses,
   addExpenseAPI,
   patchExpenseAPI,
-  deleteExpenseAPI
+  deleteExpenseAPI,
+  fetchReservations,
+  fetchReservationLineItems,
+  patchReservationLineItem as patchReservationLineItemAPI
 } from "./services/api.js";
 
 import { initAuthGate, getActiveUser, getActiveRole } from "./services/auth.js";
 
 import { renderRoomsGrid } from "./components/RoomCard.js";
+import { renderReservationsTab } from "./components/ReservationsTab.js";
 import { openModal as openCheckInModal, closeModal as closeCheckInModal } from "./components/CheckInModal.js";
 import {
   openModal as openCheckOutModal,
@@ -65,6 +75,7 @@ import { printReceipt } from "./components/Receipt.js";
 
 let CURRENT_ROLE = null;
 let _activeRoomFilter = "all";
+let _reservationsLoaded = false;
 
 // ─────────────────────────────────────────────────────
 // Room definitions (canonical local list)
@@ -178,13 +189,15 @@ function _startClock() {
 const VIEW_IDS = {
   dashboard: "view-dashboard",
   expenses: "view-expenses",
-  history: "view-history" // ADDED
+  history: "view-history", // ADDED
+  reservations: "view-reservations"
 };
 
 const VIEW_TITLES = {
   dashboard: "Room Dashboard",
   expenses: "Expenses Log",
-  history: "Booking History" // ADDED
+  history: "Booking History", // ADDED
+  reservations: "Reservations"
 };
 
 function _switchView(view) {
@@ -206,6 +219,14 @@ function _switchView(view) {
 
   if (view === "history") {
     _renderHistoryView();
+  }
+
+  if (view === "reservations") {
+    if (_reservationsLoaded) {
+      _renderReservationsView();
+    } else {
+      _loadReservations();
+    }
   }
 
   document.querySelectorAll(".nav-link").forEach((btn) => {
@@ -400,6 +421,11 @@ function _mergeData(rooms, bookings, shopLineItems) {
       payment_status: null,
       amount_paid: null,
       activeBooking: null,
+      // category_id lives on the rooms table (added for the website
+      // reservations feature) and isn't part of ROOM_DEFINITIONS, so
+      // it has to come from the live Airtable record explicitly here —
+      // ReservationsTab's per-category room picker depends on it.
+      category_id: liveRoom?.category_id ?? null,
       ...def
     };
   });
@@ -451,6 +477,35 @@ async function _loadExpenses() {
     setExpenses([]);
     showToast("error", "Expenses sync failed", result.error ?? "Could not reach Airtable.");
   }
+}
+
+// ─────────────────────────────────────────────────────
+// Reservations data loading (website bookings)
+// ─────────────────────────────────────────────────────
+
+async function _loadReservations() {
+  setState({ ui: { ...getState().ui, reservationsLoading: true } }, "loadReservations");
+
+  const [reservationsResult, lineItemsResult] = await Promise.all([
+    fetchReservations(),
+    fetchReservationLineItems()
+  ]);
+
+  if (!reservationsResult.ok) {
+    setReservations([]);
+    showToast("error", "Reservations sync failed", reservationsResult.error ?? "Could not reach the server.");
+    return;
+  }
+
+  if (!lineItemsResult.ok) {
+    setReservations(reservationsResult.reservations);
+    showToast("error", "Reservation line items sync failed", lineItemsResult.error ?? "Could not reach the server.");
+    return;
+  }
+
+  _reservationsLoaded = true;
+  setReservations(reservationsResult.reservations);
+  setReservationLineItems(lineItemsResult.items);
 }
 
 // ─────────────────────────────────────────────────────
@@ -1322,6 +1377,14 @@ function _subscribeToState() {
       }
     }
 
+    if (changedKeys.includes("reservations") || changedKeys.includes("reservationLineItems")) {
+      _renderReservationsBadge();
+      const { ui } = getState();
+      if (ui.activeView === "reservations") {
+        _renderReservationsView();
+      }
+    }
+
     if (changedKeys.includes("ui")) {
       const { ui, rooms } = getState();
       _renderSyncIndicator(ui.syncStatus);
@@ -1360,16 +1423,19 @@ async function _init() {
 
   await _loadRooms();
   await _loadExpenses();
+  await _loadReservations();
 
   setInterval(() => {
     _loadRooms();
     _loadExpenses();
+    _loadReservations();
   }, 30 * 1000);
 
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") {
       _loadRooms();
       _renderExpenses();
+      _loadReservations();
     }
   });
 }
@@ -1417,6 +1483,105 @@ async function _renderHistoryView() {
   } else {
     container.innerHTML = '<tr><td colspan="7" class="text-red-500 text-center py-10">Failed to load history.</td></tr>';
   }
+}
+
+// ─────────────────────────────────────────────────────
+// Reservations view (website bookings)
+// ─────────────────────────────────────────────────────
+
+function _renderReservationsView() {
+  const { reservations, reservationLineItems } = getState();
+  renderReservationsTab(reservations, reservationLineItems, {
+    getAvailableRoomsForCategory: (categoryId, excludeNames) => getAvailableRoomsByCategory(categoryId, excludeNames),
+    onAssignRoom: _handleAssignReservationRoom
+  });
+}
+
+function _renderReservationsBadge() {
+  const badge = document.getElementById("nav-reservations-badge");
+  if (!badge) return;
+
+  const count = getPendingLineItemsCount();
+  badge.textContent = String(count);
+  badge.classList.toggle("hidden", count === 0);
+}
+
+/**
+ * Assigns a specific room to a reservation line item: checks the
+ * guest in for real (reusing the existing single-room checkIn() —
+ * no duplicated check-in logic here), then marks the line item
+ * checked_in and records the room/booking it landed on.
+ *
+ * @param {Object} reservation
+ * @param {Object} lineItem
+ * @param {Object} room
+ */
+async function _handleAssignReservationRoom(reservation, lineItem, room) {
+  const created_by = getActiveUser() ?? "unknown";
+
+  const checkInDate = new Date();
+  const checkOutDate = reservation.check_out ? new Date(reservation.check_out) : null;
+  const reservationCheckIn = reservation.check_in ? new Date(reservation.check_in) : checkInDate;
+  const rawNights = checkOutDate
+    ? Math.round((checkOutDate.getTime() - reservationCheckIn.getTime()) / 86400000)
+    : 1;
+  const nights = Math.max(1, rawNights || 1);
+
+  setSyncStatus("saving");
+
+  const result = await checkIn({
+    room_name: room.room_name,
+    guest_name: reservation.guest_name,
+    nights,
+    check_in: checkInDate.toISOString().split("T")[0],
+    room_type: room.room_type,
+    base_rate: Number(room.base_rate),
+    // Room rates stay staff-adjustable at check-in time, independent
+    // of the website's fixed category price — default to the room's
+    // own base rate here; front desk can adjust it later the same way
+    // as any other booking, via the normal checkout flow.
+    charged_rate: Number(room.base_rate),
+    payment_status: "unpaid",
+    amount_paid: 0,
+    is_active: true,
+    created_by
+  });
+
+  if (!result.ok) {
+    setSyncStatus("error");
+    showToast("error", "Check-in failed", result.error ?? `Could not check ${reservation.guest_name} into ${room.room_name}.`);
+    return;
+  }
+
+  const patchResult = await patchReservationLineItemAPI(lineItem.line_item_id, {
+    status: "checked_in",
+    assigned_room_name: room.room_name,
+    assigned_booking_id: result.booking_id
+  });
+
+  if (!patchResult.ok) {
+    // The booking itself landed fine — only the reservation-tracking
+    // row failed to update. Don't roll back the check-in for this;
+    // surface it so the front desk knows the reservation card may
+    // look stale until they retry/refresh.
+    setSyncStatus("error");
+    showToast(
+      "error",
+      "Room assigned, but reservation update failed",
+      patchResult.error ?? "The room was checked in, but the reservation record didn't save. Refresh and retry."
+    );
+  } else {
+    setSyncStatus("synced");
+    showToast("success", "Room assigned", `${room.room_name} → ${reservation.guest_name}`);
+  }
+
+  patchReservationLineItemState(lineItem.line_item_id, {
+    status: "checked_in",
+    assigned_room_name: room.room_name,
+    assigned_booking_id: result.booking_id
+  });
+
+  await _loadRooms(); // Refresh the grid so the newly-occupied room shows up.
 }
 
 // ─────────────────────────────────────────────────────
