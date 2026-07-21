@@ -37,7 +37,8 @@ import {
   setReservationLineItems,
   patchReservationLineItem as patchReservationLineItemState,
   getPendingLineItemsCount,
-  getAvailableRoomsByCategory
+  getAvailableRoomsByCategory,
+  getReservationConflicts
 } from "./services/state.js";
 
 // ADDED: Added clean Airtable CRUD operations here
@@ -841,6 +842,9 @@ function _onCardClick(room) {
       onCheckIn: _handleCheckIn,
       // Inject the selector so the modal can find other available rooms
       getAvailableRooms: (excluded) => getAvailableRooms(excluded),
+      // Lets the modal warn if this room's category is short on
+      // inventory for pending website reservations.
+      getReservationConflicts: (params) => getReservationConflicts(params),
       ownerMode: getActiveRole() === "owner"
     });
   } else if (room.status === "occupied") {
@@ -1347,6 +1351,9 @@ function _renderMultiSelectBar(selectedRooms) {
 
     openCheckInModal(roomsToCheckIn, {
       onCheckIn: _handleCheckIn,
+      // Same callbacks as the single-room check-in call site above.
+      getAvailableRooms: (excluded) => getAvailableRooms(excluded),
+      getReservationConflicts: (params) => getReservationConflicts(params),
       ownerMode: getActiveRole() === "owner"
     });
   };

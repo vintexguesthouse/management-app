@@ -563,3 +563,115 @@ export function patchReservationLineItem(lineItemId, patch) {
 export function getPendingLineItemsCount() {
   return _state.reservationLineItems.filter((li) => li.status === 'pending').length;
 }
+
+// ─────────────────────────────────────────────────────
+// Reservation-conflict check (PMS front-desk warning)
+// ─────────────────────────────────────────────────────
+//
+// Backs CheckInModal_2's warning banner: before the front desk commits
+// a room in a given category to a walk-in, this tells them whether
+// doing so would leave too few rooms of that category free to cover
+// pending/confirmed website reservations for overlapping dates. This
+// is a WARNING only — see the two-tap "Check In Anyway" Save button in
+// CheckInModal.js — never a hard block.
+
+/** Normalizes an ISO date (or timestamp) string to a Date at local midnight. */
+function _dateOnly(isoLike) {
+  const datePart = String(isoLike).slice(0, 10);
+  return new Date(`${datePart}T00:00:00`);
+}
+
+/** Returns a new Date `days` after `date`. */
+function _addDays(date, days) {
+  const d = new Date(date);
+  d.setDate(d.getDate() + (Number(days) || 0));
+  return d;
+}
+
+/**
+ * Overlap test for two [start, end) date ranges. Same-day turnover is
+ * free, so both sides use a strict inequality.
+ */
+function _rangesOverlap(aStart, aEnd, bStart, bEnd) {
+  return aStart < bEnd && bStart < aEnd;
+}
+
+/**
+ * Checks whether checking a room into `categoryId` for
+ * [checkInDate, checkInDate + nights) would leave enough of that
+ * category free to cover pending/confirmed website reservations that
+ * overlap the same dates.
+ *
+ * Occupancy comes straight from `_state.rooms` (status === 'occupied',
+ * using each room's own check_in/nights) — the same source
+ * getAvailableRooms()/getRelatedRooms() already read — not a separate
+ * bookings fetch.
+ *
+ * @param {{
+ *   categoryId: string,
+ *   checkInDate: string,       // ISO date, the day this room is being checked in
+ *   nights: number,
+ *   excludeRoomName?: string,  // the room currently being checked in
+ * }} params
+ * @returns {{
+ *   hasConflict: boolean,
+ *   shortBy: number,
+ *   reservations: Array<{ guestName: string, checkIn: string, checkOut: string, quantity: number }>
+ * }}
+ */
+export function getReservationConflicts({ categoryId, checkInDate, nights, excludeRoomName }) {
+  const { rooms, reservations, reservationLineItems } = getState();
+
+  const proposedStart = _dateOnly(checkInDate);
+  const proposedEnd = _addDays(proposedStart, nights);
+
+  const categoryRooms = rooms.filter((r) => r.category_id === categoryId);
+  const totalUnits = categoryRooms.length;
+
+  // This room itself (about to become occupied) takes one unit out of
+  // the pool, plus any OTHER occupied room in the category whose stay
+  // overlaps the same dates.
+  const isRoomInCategory = categoryRooms.some((r) => r.room_name === excludeRoomName);
+  const otherOccupiedOverlapping = categoryRooms.filter((r) => {
+    if (r.room_name === excludeRoomName) return false;
+    if (r.status !== 'occupied') return false;
+    if (!r.check_in || !r.nights) return false;
+    const occStart = _dateOnly(r.check_in);
+    const occEnd = _addDays(occStart, r.nights);
+    return _rangesOverlap(proposedStart, proposedEnd, occStart, occEnd);
+  });
+
+  const roomsLeft = Math.max(
+    0,
+    totalUnits - (isRoomInCategory ? 1 : 0) - otherOccupiedOverlapping.length
+  );
+
+  const reservationsById = new Map(reservations.map((r) => [r.airtable_id, r]));
+
+  const overlappingLineItems = reservationLineItems.filter((li) => {
+    if (li.category_id !== categoryId) return false;
+    if (li.status !== 'pending' && li.status !== 'confirmed') return false;
+    const reservationId = Array.isArray(li.reservation_id) ? li.reservation_id[0] : li.reservation_id;
+    const reservation = reservationsById.get(reservationId);
+    if (!reservation || !reservation.check_in || !reservation.check_out) return false;
+    const resStart = _dateOnly(reservation.check_in);
+    const resEnd = _dateOnly(reservation.check_out);
+    return _rangesOverlap(proposedStart, proposedEnd, resStart, resEnd);
+  });
+
+  const quantityNeeded = overlappingLineItems.reduce((sum, li) => sum + (Number(li.quantity) || 0), 0);
+  const shortBy = Math.max(0, quantityNeeded - roomsLeft);
+
+  const reservationsList = overlappingLineItems.map((li) => {
+    const reservationId = Array.isArray(li.reservation_id) ? li.reservation_id[0] : li.reservation_id;
+    const reservation = reservationsById.get(reservationId);
+    return {
+      guestName: reservation?.guest_name ?? 'Unknown guest',
+      checkIn: reservation?.check_in ?? null,
+      checkOut: reservation?.check_out ?? null,
+      quantity: Number(li.quantity) || 0
+    };
+  });
+
+  return { hasConflict: shortBy > 0, shortBy, reservations: reservationsList };
+}

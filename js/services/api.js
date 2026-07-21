@@ -576,6 +576,17 @@ export async function deleteShopLineItems(lineItemIds) {
 // calls patchReservationLineItem() below to mark the line item
 // checked_in and record which room/booking it landed on. See
 // main.js's reservation-assignment handler for that orchestration.
+//
+// FIELD NAME NOTE: the real Airtable field on both `reservations` and
+// `reservation_line_items` is called `status_reading`, not `status`
+// (renamed from the original `status` single-select — see project
+// history). `reservation_line_items` currently still has a leftover,
+// unused `Status` field alongside it too; that one is ignored here.
+// Rather than have every caller (state.js, ReservationsTab.js,
+// main.js) know about this Airtable-specific field name, it's
+// aliased to a clean `.status` property right here at the fetch/patch
+// boundary — so everywhere else in the app just reads/writes
+// `.status` like any other field.
 
 // 10. FETCH RESERVATIONS
 export async function fetchReservations() {
@@ -583,7 +594,14 @@ export async function fetchReservations() {
     const response = await fetch(`${AIRTABLE_URL}/reservations`, { method: "GET", headers: getHeaders() });
     if (!response.ok) return _handleError(`HTTP ${response.status}: ${response.statusText}`);
     const data = await response.json();
-    return { ok: true, reservations: data.records.map((r) => ({ airtable_id: r.id, ...r.fields })) };
+    return {
+      ok: true,
+      reservations: data.records.map((r) => ({
+        airtable_id: r.id,
+        ...r.fields,
+        status: r.fields.status_reading
+      }))
+    };
   } catch (err) {
     return _handleError(err);
   }
@@ -595,19 +613,31 @@ export async function fetchReservationLineItems() {
     const response = await fetch(`${AIRTABLE_URL}/reservation_line_items`, { method: "GET", headers: getHeaders() });
     if (!response.ok) return _handleError(`HTTP ${response.status}: ${response.statusText}`);
     const data = await response.json();
-    return { ok: true, items: data.records.map((r) => ({ line_item_id: r.id, ...r.fields })) };
+    return {
+      ok: true,
+      items: data.records.map((r) => ({
+        line_item_id: r.id,
+        ...r.fields,
+        status: r.fields.status_reading
+      }))
+    };
   } catch (err) {
     return _handleError(err);
   }
 }
 
 // 12. PATCH RESERVATION LINE ITEM
-export async function patchReservationLineItem(lineItemId, payload) {
+export async function patchReservationLineItem(lineItemId, { status, ...rest }) {
   try {
+    const fields = { ...rest };
+    // Translate the app-facing `status` key back to the real Airtable
+    // field name (`status_reading`) on the way out.
+    if (status !== undefined) fields.status_reading = status;
+
     const response = await fetch(`${AIRTABLE_URL}/reservation_line_items/${lineItemId}`, {
       method: "PATCH",
       headers: getHeaders(),
-      body: JSON.stringify({ fields: payload })
+      body: JSON.stringify({ fields })
     });
     if (!response.ok) return _handleError(`HTTP ${response.status}: ${response.statusText}`, response);
     return { ok: true };

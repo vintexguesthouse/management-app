@@ -61,7 +61,16 @@ let _roomTypeSelections = {};       // room_name -> "Bed and Breakfast" | "Bed O
 let _rateSelections = {};           // room_name -> currently chosen charged_rate (number)
 let _onCheckInCallback = null;
 let _getAvailableRoomsCallback = null;
+let _getReservationConflictsCallback = null;
 let _ownerMode = false;
+
+// Two-tap confirm state for the Save button, mirroring CheckOutModal.js's
+// delete-booking button: first click just warns (flips the label to
+// "Check In Anyway"), second click within the window actually saves.
+// Reset any time the underlying conflict list changes (nights edited,
+// or a room added/removed) so a stale confirm can't slip through.
+let _pendingCheckInConfirm = false;
+let _conflictConfirmTimeout = null;
 
 // ─────────────────────────────────────────────────────
 // Internal helpers
@@ -123,6 +132,13 @@ function _generateClientBookingRef(guestName) {
 /** Names of rooms currently in the group, for exclusion + dedupe checks. */
 function _activeGroupNames() {
   return _activeGroup.map((r) => r.room_name);
+}
+
+/** Today as an ISO date string — a fresh check-in's occupancy starts today. */
+function _todayISO() {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d.toISOString().slice(0, 10);
 }
 
 // ─────────────────────────────────────────────────────
@@ -309,6 +325,7 @@ function _buildCheckInForm() {
     </div>
 
     <div class="px-5 py-4 border-t border-gray-800 space-y-2">
+      <div id="ci-conflict-warning" class="hidden"></div>
       <div id="ci-validation-msg" class="text-xs text-red-400 hidden mb-1"></div>
       <button id="btn-save-checkin" type="button"
         class="w-full py-2.5 rounded-xl font-semibold text-sm text-white bg-gradient-to-r from-brand-600 to-brand-500
@@ -358,6 +375,103 @@ function _refreshModalBody() {
 
   _wireAddRoomRow();
   _validateSharedFields();
+  _renderConflictBanner();
+}
+
+// ─────────────────────────────────────────────────────
+// Reservation-conflict warning (pending website bookings)
+// ─────────────────────────────────────────────────────
+
+/**
+ * Asks the host app (via the getReservationConflicts callback) whether
+ * each room currently in the group would leave its category short on
+ * inventory for pending/confirmed website reservations, given the
+ * current Nights value. Rooms with no category_id are skipped — there's
+ * nothing to check against.
+ * @returns {Array<{ room: Object, conflict: { hasConflict, shortBy, reservations } }>}
+ */
+function _getActiveConflicts() {
+  if (!_getReservationConflictsCallback) return [];
+
+  const nightsInput = document.getElementById("ci-nights");
+  const nights = Number(nightsInput?.value);
+  if (!nights || nights < 1) return [];
+
+  const checkInDate = _todayISO();
+  const conflicts = [];
+
+  for (const room of _activeGroup) {
+    if (!room.category_id) continue;
+    const conflict = _getReservationConflictsCallback({
+      categoryId: room.category_id,
+      checkInDate,
+      nights,
+      excludeRoomName: room.room_name
+    });
+    if (conflict?.hasConflict) conflicts.push({ room, conflict });
+  }
+
+  return conflicts;
+}
+
+/** Computes what the Save button's label should read right now. */
+function _computeSaveLabel() {
+  if (_pendingCheckInConfirm) return "Check In Anyway";
+  return _activeGroup.length > 1 ? `Check In ${_activeGroup.length} Rooms` : "Save Check-In";
+}
+
+/** Re-applies the current save label to the DOM, if the button exists. */
+function _updateSaveButtonLabel() {
+  const label = document.getElementById("ci-save-btn-label");
+  if (label) label.textContent = _computeSaveLabel();
+}
+
+/** Clears any pending two-tap confirm state and reverts the Save label. */
+function _resetSaveConfirm() {
+  _pendingCheckInConfirm = false;
+  clearTimeout(_conflictConfirmTimeout);
+  _conflictConfirmTimeout = null;
+  _updateSaveButtonLabel();
+}
+
+/**
+ * Recomputes conflicts for the current group + nights value and
+ * refreshes the warning banner. Called on open, whenever Nights
+ * changes, and whenever a room is added/removed — any of which can
+ * change which rooms are short, so any half-confirmed "Check In
+ * Anyway" state is reset rather than carried forward against a
+ * conflict list that's no longer the one the attendant saw.
+ */
+function _renderConflictBanner() {
+  const banner = document.getElementById("ci-conflict-warning");
+  if (!banner) return;
+
+  const conflicts = _getActiveConflicts();
+
+  if (conflicts.length === 0) {
+    banner.classList.add("hidden");
+    banner.innerHTML = "";
+    _resetSaveConfirm();
+    return;
+  }
+
+  const itemsHtml = conflicts
+    .map(({ room, conflict }) => {
+      const resSummary = conflict.reservations
+        .map((r) => `${r.guestName} (${r.checkIn} → ${r.checkOut}, ${r.quantity} room${r.quantity !== 1 ? "s" : ""})`)
+        .join("; ");
+      return `<li><span class="font-semibold text-white">${room.room_name}</span> — short by ${conflict.shortBy} for: ${resSummary}</li>`;
+    })
+    .join("");
+
+  banner.innerHTML = `
+    <div class="rounded-lg bg-amber-950/40 border border-amber-700/60 px-3 py-2.5 text-xs text-amber-300 space-y-1.5">
+      <p class="font-semibold text-amber-200">Pending website reservation may need this room</p>
+      <ul class="list-disc list-inside space-y-0.5">${itemsHtml}</ul>
+    </div>
+  `;
+  banner.classList.remove("hidden");
+  _resetSaveConfirm();
 }
 
 // ─────────────────────────────────────────────────────
@@ -486,7 +600,10 @@ function _wireCheckInForm() {
 
   // 1. Shared input listeners (guest name / nights never get re-created)
   guestInput.addEventListener("input", _validateSharedFields);
-  nightsInput.addEventListener("input", _validateSharedFields);
+  nightsInput.addEventListener("input", () => {
+    _validateSharedFields();
+    _renderConflictBanner();
+  });
 
   // 2. Event delegation for room-type + remove buttons, and rate selects.
   //    Attached once on the stable #ci-rooms-section wrapper, so rooms
@@ -509,6 +626,24 @@ function _wireCheckInForm() {
 
   // 5. Final Save
   saveBtn.addEventListener("click", () => {
+    // Reservation-conflict two-tap: a conflict never blocks the save
+    // outright, it just requires a second tap — same in-place confirm
+    // pattern as CheckOutModal.js's delete-booking button, rather than
+    // a native window.confirm() popup.
+    const conflicts = _getActiveConflicts();
+    if (conflicts.length > 0 && !_pendingCheckInConfirm) {
+      _pendingCheckInConfirm = true;
+      _updateSaveButtonLabel();
+      clearTimeout(_conflictConfirmTimeout);
+      _conflictConfirmTimeout = setTimeout(() => {
+        _pendingCheckInConfirm = false;
+        _updateSaveButtonLabel();
+      }, 3000);
+      return;
+    }
+    _pendingCheckInConfirm = false;
+    clearTimeout(_conflictConfirmTimeout);
+
     const guestName = guestInput.value.trim();
     const nights = Number(nightsInput.value);
 
@@ -614,13 +749,18 @@ function _wireCheckInForm() {
  * @param {{
  *   onCheckIn: Function,          // ({ rooms, payment_method, payment_reference, created_by }) => void
  *   ownerMode?: boolean,          // Pass true to bypass explanation logs for lower rates
- *   getAvailableRooms: (excludedRoomNames: string[]) => Object[]
+ *   getAvailableRooms: (excludedRoomNames: string[]) => Object[],
  *     // Returns the current list of rooms that could still be added —
  *     // main.js owns state.js, so it's the one deciding what "available"
  *     // means (status === 'available' and not already in the group).
+ *   getReservationConflicts?: ({ categoryId, checkInDate, nights, excludeRoomName }) =>
+ *     { hasConflict: boolean, shortBy: number, reservations: Object[] }
+ *     // Optional. When supplied, backs the warning banner + two-tap
+ *     // "Check In Anyway" Save button for rooms whose category is short
+ *     // on inventory for pending website reservations.
  * }} callbacks
  */
-export function openModal(rooms, { onCheckIn, ownerMode = false, getAvailableRooms }) {
+export function openModal(rooms, { onCheckIn, ownerMode = false, getAvailableRooms, getReservationConflicts }) {
   const modal = document.getElementById("checkin-modal");
   const overlay = document.getElementById("modal-overlay");
   if (!modal || !overlay) return;
@@ -636,13 +776,19 @@ export function openModal(rooms, { onCheckIn, ownerMode = false, getAvailableRoo
   });
   _onCheckInCallback = onCheckIn;
   _getAvailableRoomsCallback = typeof getAvailableRooms === "function" ? getAvailableRooms : () => [];
+  _getReservationConflictsCallback =
+    typeof getReservationConflicts === "function" ? getReservationConflicts : null;
   _ownerMode = ownerMode;
+  _pendingCheckInConfirm = false;
+  clearTimeout(_conflictConfirmTimeout);
+  _conflictConfirmTimeout = null;
 
   // Inject HTML
   modal.innerHTML = _buildCheckInForm();
 
   // Wire interactivity
   _wireCheckInForm();
+  _renderConflictBanner();
 
   // Close buttons
   document.getElementById("modal-close-btn")?.addEventListener("click", closeModal);
@@ -686,4 +832,8 @@ export function closeModal() {
   _rateSelections = {};
   _onCheckInCallback = null;
   _getAvailableRoomsCallback = null;
+  _getReservationConflictsCallback = null;
+  _pendingCheckInConfirm = false;
+  clearTimeout(_conflictConfirmTimeout);
+  _conflictConfirmTimeout = null;
 }
